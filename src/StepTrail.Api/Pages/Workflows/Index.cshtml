@@ -1,0 +1,104 @@
+@page "/ops/workflows"
+@model StepTrail.Api.Pages.Workflows.IndexModel
+@{
+    ViewData["Title"] = "Workflow Instances";
+}
+
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <h1 class="h3 mb-0">Workflow Instances</h1>
+    <div class="d-flex align-items-center gap-2">
+        <span class="text-muted small">@Model.Result.Total total</span>
+        <a href="/ops/workflows/create" class="btn btn-sm btn-primary">+ New Instance</a>
+    </div>
+</div>
+
+@* Filters *@
+<form method="get" class="d-flex align-items-center gap-2 mb-4 flex-wrap">
+    <select name="statusFilter" class="form-select form-select-sm" style="width:180px">
+        <option value="">All statuses</option>
+        @foreach (var s in IndexModel.KnownStatuses)
+        {
+            <option value="@s" selected="@(Model.StatusFilter == s)">@s</option>
+        }
+    </select>
+
+    <div class="form-check mb-0 ms-1">
+        <input class="form-check-input" type="checkbox" name="showArchived" value="true"
+               id="showArchivedCheck" checked="@Model.ShowArchived" />
+        <label class="form-check-label text-muted small" for="showArchivedCheck">
+            Show archived
+        </label>
+    </div>
+
+    <button type="submit" class="btn btn-sm btn-outline-secondary">Apply</button>
+
+    @if (!string.IsNullOrWhiteSpace(Model.StatusFilter) || Model.ShowArchived)
+    {
+        <a href="/ops/workflows" class="btn btn-sm btn-link text-secondary">Clear</a>
+    }
+</form>
+
+@if (Model.ErrorMessage is not null)
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+else if (!Model.Result.Items.Any())
+{
+    <div class="alert alert-secondary">
+        No workflow instances found.
+        @if (!Model.ShowArchived)
+        {
+            <span>Archived instances are hidden — use <strong>Show archived</strong> to include them.</span>
+        }
+    </div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-hover table-sm align-middle bg-white shadow-sm rounded">
+            <thead class="table-light">
+                <tr>
+                    <th>Instance ID</th>
+                    <th>Workflow</th>
+                    <th>External Key</th>
+                    <th>Status</th>
+                    <th>Current Step</th>
+                    <th>Created At</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in Model.Result.Items)
+                {
+                    <tr class="@(item.Status == "Archived" ? "text-muted" : "")">
+                        <td class="font-monospace small">
+                            <a href="/ops/workflows/details?id=@item.Id" class="text-decoration-none">
+                                @item.Id.ToString()
+                            </a>
+                        </td>
+                        <td>
+                            @item.WorkflowKey
+                            <span class="badge bg-light text-dark border ms-1">v@item.WorkflowVersion</span>
+                        </td>
+                        <td class="text-muted small">@(item.ExternalKey ?? "—")</td>
+                        <td>@Html.Raw(StatusBadge(item.Status))</td>
+                        <td class="text-muted small">@(item.CurrentStep ?? "—")</td>
+                        <td class="text-muted small">@item.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@functions {
+    static string StatusBadge(string status) => status switch
+    {
+        "Pending"   => "<span class=\"badge bg-secondary\">Pending</span>",
+        "Running"   => "<span class=\"badge bg-primary\">Running</span>",
+        "Completed" => "<span class=\"badge bg-success\">Completed</span>",
+        "Failed"    => "<span class=\"badge bg-danger\">Failed</span>",
+        "Cancelled" => "<span class=\"badge bg-warning text-dark\">Cancelled</span>",
+        "Archived"  => "<span class=\"badge bg-light text-secondary border\">Archived</span>",
+        _           => $"<span class=\"badge bg-light text-dark\">{status}</span>"
+    };
+}

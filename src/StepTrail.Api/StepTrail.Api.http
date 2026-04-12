@@ -1,0 +1,6 @@
+@StepTrail.Api_HostAddress = http://localhost:5280
+
+GET {{StepTrail.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

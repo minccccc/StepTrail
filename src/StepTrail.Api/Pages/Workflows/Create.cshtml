@@ -1,0 +1,91 @@
+@page "/ops/workflows/create"
+@model StepTrail.Api.Pages.Workflows.CreateModel
+@{
+    ViewData["Title"] = "Create Workflow Instance";
+}
+
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/ops/workflows">Workflow Instances</a></li>
+        <li class="breadcrumb-item active">Create New</li>
+    </ol>
+</nav>
+
+<div class="row justify-content-center">
+    <div class="col-lg-7">
+        <div class="card shadow-sm">
+            <div class="card-header fw-semibold">Start a New Workflow Instance</div>
+            <div class="card-body">
+
+                @if (Model.LoadError is not null)
+                {
+                    <div class="alert alert-danger">@Model.LoadError</div>
+                }
+
+                @if (!ViewData.ModelState.IsValid)
+                {
+                    <div class="alert alert-danger">
+                        @foreach (var error in ViewData.ModelState.Values.SelectMany(v => v.Errors))
+                        {
+                            <div>@error.ErrorMessage</div>
+                        }
+                    </div>
+                }
+
+                <form method="post">
+                    @Html.AntiForgeryToken()
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold" for="WorkflowKey">Workflow</label>
+                        @if (!Model.Workflows.Any())
+                        {
+                            <div class="text-muted small">No workflows registered.</div>
+                        }
+                        else
+                        {
+                            <select id="WorkflowKey" name="WorkflowKey" class="form-select" required>
+                                <option value="">— select a workflow —</option>
+                                @foreach (var wf in Model.Workflows)
+                                {
+                                    <option value="@wf.Key"
+                                            selected="@(Model.WorkflowKey == wf.Key)">
+                                        @wf.Name (v@wf.Version)
+                                        @if (!string.IsNullOrWhiteSpace(wf.Description))
+                                        {
+                                            <text> — @wf.Description</text>
+                                        }
+                                    </option>
+                                }
+                            </select>
+                        }
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold" for="ExternalKey">External Key
+                            <span class="text-muted fw-normal">(optional)</span>
+                        </label>
+                        <input id="ExternalKey" name="ExternalKey" type="text"
+                               class="form-control" placeholder="e.g. user-42, order-9871"
+                               value="@Model.ExternalKey" />
+                        <div class="form-text">A caller-supplied identifier for this instance. Useful for looking it up later.</div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label fw-semibold" for="InputJson">Input JSON
+                            <span class="text-muted fw-normal">(optional)</span>
+                        </label>
+                        <textarea id="InputJson" name="InputJson" rows="6"
+                                  class="form-control font-monospace"
+                                  placeholder='{ "userId": "alice@example.com", "plan": "pro" }'>@Model.InputJson</textarea>
+                        <div class="form-text">Must be valid JSON if provided.</div>
+                    </div>
+
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn btn-primary">Start Instance</button>
+                        <a href="/ops/workflows" class="btn btn-outline-secondary">Cancel</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>

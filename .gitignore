@@ -1,0 +1,20 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## VS / Rider
+.vs/
+.idea/
+*.DotSettings.user
+
+## Secrets
+appsettings.*.local.json
+.claude/
+
+## OS
+Thumbs.db
+.DS_Store

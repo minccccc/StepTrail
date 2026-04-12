@@ -1,0 +1,40 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "StepTrail.Api",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${workspaceFolder}/src/StepTrail.Api/bin/Debug/net9.0/StepTrail.Api.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/src/StepTrail.Api",
+            "stopAtEntry": false,
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development",
+                "ASPNETCORE_URLS": "http://localhost:5000"
+            },
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "StepTrail.Worker",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${workspaceFolder}/src/StepTrail.Worker/bin/Debug/net9.0/StepTrail.Worker.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/src/StepTrail.Worker",
+            "stopAtEntry": false,
+            "env": {
+                "DOTNET_ENVIRONMENT": "Development"
+            },
+            "console": "integratedTerminal"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "StepTrail: API + Worker",
+            "configurations": ["StepTrail.Api", "StepTrail.Worker"]
+        }
+    ]
+}
