@@ -4,40 +4,100 @@ This document summarizes the HTTP surface exposed by `StepTrail.Api`.
 
 ## API Style
 
-The API is implemented as ASP.NET Core Minimal API endpoints.
+The API is implemented as ASP.NET Core Minimal API endpoints plus Razor Pages.
 
-It currently exposes:
+It exposes two distinct surfaces:
 
-- health and documentation endpoints
-- workflow metadata endpoint
-- command endpoints for start, retry, replay
-- operational read endpoints for instance list, detail, and timeline
+- **protected ops surface** — requires cookie authentication; covers all management and read operations
+- **public integration surface** — no authentication; covers webhook triggers and health probing
 
-## Documentation Endpoints
+## Authentication
 
-When the API is running locally:
+All ops API endpoints and the Razor Pages ops console require a valid session cookie.
 
-- OpenAPI document: `http://localhost:5000/openapi/v1.json`
-- Scalar UI: `http://localhost:5000/scalar/v1`
+Login:
 
-## Main Endpoints
+- `GET /login` — login page
+- `POST /login` — authenticates with username/password from config (`Ops:Username`, `Ops:Password`)
+- `POST /logout` — clears the session cookie
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/health` | Verify API to database connectivity |
-| `GET` | `/workflows` | List registered workflow definitions |
-| `POST` | `/workflow-instances` | Start a new workflow instance |
-| `GET` | `/workflow-instances` | List workflow instances with filters and paging |
-| `GET` | `/workflow-instances/{id}` | Get one workflow instance with step executions |
-| `GET` | `/workflow-instances/{id}/timeline` | Get chronological workflow events |
-| `POST` | `/workflow-instances/{id}/retry` | Retry from the most recent failed step |
-| `POST` | `/workflow-instances/{id}/replay` | Replay the workflow from the first step |
+Credentials are configured via `appsettings.json` or environment variable overrides (`Ops__Username`, `Ops__Password`). The committed defaults (`admin`/`admin`) should be overridden before any non-local deployment.
 
-## Start Workflow Request
+## Ops Console (Razor Pages)
+
+The browser-based operations console is available at:
+
+- `/ops/workflows` — instance list with status filter and archive toggle
+- `/ops/workflows/details?id={guid}` — instance detail with step executions and timeline
+- `/ops/workflows/create` — start a new workflow instance manually
+- `/ops/templates` — template gallery
+- `/ops/templates/setup?template=webhook-to-http-call` — guided setup wizard for the webhook-to-HTTP template
+
+The console calls the ops REST API on loopback via `WorkflowApiClient`. The browser cookie is forwarded automatically by `ForwardAuthCookieHandler`.
+
+## Documentation Endpoints (unauthenticated)
+
+- `GET /openapi/v1.json` — OpenAPI document
+- `GET /scalar/v1` — Scalar interactive UI
+
+## Public Endpoints
+
+### Health Check
+
+`GET /health`
+
+Returns database connectivity status:
+
+```json
+{ "status": "healthy", "database": "connected" }
+```
+
+Returns `503` with `"status": "unhealthy"` if the database is unreachable.
+
+### Webhook Trigger
+
+`POST /webhooks/{workflowKey}`
+
+Starts a workflow instance. Intended for external event sources — no authentication required.
+
+Request:
+
+- URL path: `workflowKey` — the workflow descriptor key
+- Query: `tenantId` (optional UUID) — defaults to the seeded default tenant if omitted
+- Header: `X-Idempotency-Key` (optional) — deduplication key
+- Header: `X-External-Key` (optional) — caller correlation value
+- Body: any JSON payload — stored as workflow input (passed to the first step)
+
+If the body is present but not valid JSON, the request still proceeds with null input.
+
+Response: same shape as `POST /workflow-instances`.
+
+## Ops API Endpoints
+
+> All endpoints below require a valid session cookie.
+
+### Workflow Definitions
+
+`GET /workflows`
+
+Returns all registered workflow definitions with their ordered step lists.
+
+### Workflow Instances
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/workflow-instances` | Start a new instance |
+| `GET` | `/workflow-instances` | List instances (paged, filterable) |
+| `GET` | `/workflow-instances/{id}` | Get one instance with step summaries |
+| `GET` | `/workflow-instances/{id}/timeline` | Get chronological event log |
+| `POST` | `/workflow-instances/{id}/retry` | Retry from last failed step |
+| `POST` | `/workflow-instances/{id}/replay` | Replay from step 1 |
+| `POST` | `/workflow-instances/{id}/cancel` | Cancel a Pending or Running instance |
+| `POST` | `/workflow-instances/{id}/archive` | Archive a Completed or Failed instance |
+
+#### Start Workflow Request
 
 `POST /workflow-instances`
-
-Request body:
 
 ```json
 {
@@ -55,22 +115,14 @@ Request body:
 
 Fields:
 
-- `workflowKey`
-  Required. Workflow descriptor key.
-- `version`
-  Optional. If omitted, the latest registered version is used.
-- `tenantId`
-  Required. Tenant for execution scope.
-- `externalKey`
-  Optional. Caller correlation value.
-- `idempotencyKey`
-  Optional. Used to return the existing instance if the same start request is replayed logically.
-- `input`
-  Optional. Arbitrary JSON payload stored with the instance and first step execution.
+- `workflowKey` — required
+- `version` — optional; latest version used if omitted
+- `tenantId` — required
+- `externalKey` — optional caller correlation value
+- `idempotencyKey` — optional; returns the existing instance if already used by this tenant
+- `input` — optional arbitrary JSON
 
-## Start Workflow Response
-
-Example:
+#### Start Workflow Response
 
 ```json
 {
@@ -87,62 +139,36 @@ Example:
 }
 ```
 
-Meaning:
+`wasAlreadyStarted: true` means the instance already existed and was returned due to idempotency.
 
-- `wasAlreadyStarted = false`
-  The workflow was created by this request.
-- `wasAlreadyStarted = true`
-  The workflow already existed and was returned because of idempotency.
+Returns `201 Created` for new instances, `200 OK` for idempotent returns.
 
-## List Workflow Instances
+#### List Instances
 
 `GET /workflow-instances`
 
-Supported query parameters:
+Query parameters:
 
-- `tenantId`
-- `workflowKey`
-- `status`
-- `page`
-- `pageSize`
+- `tenantId` — filter by tenant
+- `workflowKey` — filter by workflow key
+- `status` — filter by status (`Pending`, `Running`, `Completed`, `Failed`, `Cancelled`, `Archived`)
+- `includeArchived` — `true` to include archived instances (default `false`)
+- `page` — 1-based page number (default `1`)
+- `pageSize` — items per page, clamped 1–100 (default `20`)
 
-Example:
+Invalid `status` returns `400 Bad Request`.
 
-```text
-/workflow-instances?tenantId=00000000-0000-0000-0000-000000000001&status=Failed&page=1&pageSize=20
-```
-
-Supported `status` values:
-
-- `Pending`
-- `Running`
-- `Completed`
-- `Failed`
-- `Cancelled`
-
-If `status` is invalid, the endpoint returns `400 Bad Request`.
-
-## Get Workflow Detail
+#### Instance Detail
 
 `GET /workflow-instances/{id}`
 
-Returns:
+Returns instance metadata, current status, stored input, and ordered step execution summaries. The `output` field on a failed `HttpActivityHandler` step contains the HTTP response body — useful for diagnosing remote errors without replaying the step.
 
-- instance identity and metadata
-- workflow key and version
-- current workflow status
-- stored input payload
-- ordered step execution summaries
-
-This endpoint is the best API-level view of execution history for a single workflow.
-
-## Get Timeline
+#### Timeline
 
 `GET /workflow-instances/{id}/timeline`
 
-Returns events in chronological order.
-
-Each timeline item may include:
+Returns events in chronological order. Each item includes:
 
 - `eventType`
 - `stepKey`
@@ -150,54 +176,75 @@ Each timeline item may include:
 - `payload`
 - `createdAt`
 
-This is the operational event stream for one workflow instance.
+#### Action Endpoints
 
-## Retry And Replay
+All four action endpoints (`retry`, `replay`, `cancel`, `archive`) return:
 
-### Retry
+- `200 OK` with a result summary on success
+- `404 Not Found` if the instance does not exist
+- `409 Conflict` if the instance is in a state that does not allow that action
 
-`POST /workflow-instances/{id}/retry`
+### Secrets Management
 
-Behavior:
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/secrets` | List all secret names and descriptions |
+| `PUT` | `/secrets/{name}` | Create or update a named secret |
+| `DELETE` | `/secrets/{name}` | Delete a named secret |
 
-- valid only when the instance is `Failed`
-- creates a new pending execution for the most recent failed step
+Secret values are **never** returned by any API endpoint.
 
-### Replay
+#### Upsert Secret
 
-`POST /workflow-instances/{id}/replay`
+`PUT /secrets/{name}`
 
-Behavior:
+```json
+{
+  "value": "sk-abc123",
+  "description": "Third-party API key for notification service"
+}
+```
 
-- valid when the instance is `Failed` or `Completed`
-- creates a new pending execution for the first step
+- `value` — required
+- `description` — optional; retained from existing entry if omitted on update
 
-Current note:
+Returns `201 Created` for new secrets, `200 OK` for updates.
 
-- replay currently restarts from the first step only
+Once stored, reference the secret in step configuration as `{{secrets.{name}}}`.
 
-## Built-In Workflow
+## Registered Workflows
 
-The current example workflow is:
+Two workflows are currently registered in the system:
 
-- `user-onboarding`
+### `user-onboarding`
 
-Current steps:
+A sample workflow demonstrating code-first definition with three sequential handlers:
 
 1. `send-welcome-email`
 2. `provision-account`
 3. `notify-team`
 
+### `webhook-to-http-call`
+
+A packaged template workflow with one step using the built-in `HttpActivityHandler`:
+
+1. `http-call` — forwards the webhook payload to the URL stored in the `webhook-to-http-call-url` secret
+
+Set up via the ops console at `/ops/templates/setup?template=webhook-to-http-call` or manually:
+
+1. `PUT /secrets/webhook-to-http-call-url` — store the target URL
+2. Trigger via `POST /webhooks/webhook-to-http-call` with a JSON body, or start manually from the ops console
+
 ## Default Tenant
 
 For local development, the API seeds a stable default tenant:
 
-```text
+```
 00000000-0000-0000-0000-000000000001
 ```
 
-This is useful for:
+Use this for:
 
 - manual API testing
-- UI prototyping
+- webhook integration testing
 - local development flows

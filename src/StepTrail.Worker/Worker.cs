@@ -28,6 +28,12 @@ public sealed class Worker : BackgroundService
         {
             try
             {
+                // Detect and requeue orphaned executions before claiming new work.
+                await DetectStuckExecutionsAsync(stoppingToken);
+
+                // Fire any recurring schedules that are due.
+                await DispatchRecurringWorkflowsAsync(stoppingToken);
+
                 var claimed = await TryClaimAndProcessAsync(stoppingToken);
 
                 // Back off only when there's nothing to do.
@@ -47,6 +53,28 @@ public sealed class Worker : BackgroundService
         }
 
         _logger.LogInformation("Worker {WorkerId} stopped", _workerId);
+    }
+
+    private async Task DetectStuckExecutionsAsync(CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var detector = scope.ServiceProvider.GetRequiredService<StuckExecutionDetector>();
+        var count = await detector.DetectAndRequeueAsync(ct);
+        if (count > 0)
+            _logger.LogInformation(
+                "Worker {WorkerId} recovered {Count} orphaned step execution(s)",
+                _workerId, count);
+    }
+
+    private async Task DispatchRecurringWorkflowsAsync(CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var dispatcher = scope.ServiceProvider.GetRequiredService<RecurringWorkflowDispatcher>();
+        var count = await dispatcher.DispatchDueSchedulesAsync(ct);
+        if (count > 0)
+            _logger.LogInformation(
+                "Worker {WorkerId} triggered {Count} recurring workflow instance(s)",
+                _workerId, count);
     }
 
     private async Task<bool> TryClaimAndProcessAsync(CancellationToken ct)

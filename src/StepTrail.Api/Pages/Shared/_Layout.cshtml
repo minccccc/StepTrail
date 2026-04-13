@@ -28,7 +28,22 @@
     <nav class="navbar navbar-dark bg-dark mb-4">
         <div class="container-fluid">
             <a class="navbar-brand" href="/ops/workflows">StepTrail Ops</a>
-            <span class="navbar-text text-secondary small">Operations Console</span>
+            <div class="d-flex align-items-center gap-3 me-auto ms-4">
+                <a href="/ops/workflows" class="nav-link text-secondary small px-0">Instances</a>
+                <a href="/ops/templates" class="nav-link text-secondary small px-0">Templates</a>
+            </div>
+            <div class="d-flex align-items-center gap-3">
+                <span class="navbar-text text-secondary small">Operations Console</span>
+                @if (User.Identity?.IsAuthenticated == true)
+                {
+                    <span class="navbar-text text-light small">@User.Identity.Name</span>
+                    <form method="post" action="/logout" class="mb-0">
+                        <button type="submit" class="btn btn-sm btn-outline-secondary text-light border-secondary">
+                            Sign out
+                        </button>
+                    </form>
+                }
+            </div>
         </div>
     </nav>
 

@@ -23,6 +23,7 @@ public class WorkflowStepExecutionConfiguration : IEntityTypeConfiguration<Workf
         builder.Property(e => e.ScheduledAt).HasColumnName("scheduled_at").IsRequired();
         builder.Property(e => e.LockedAt).HasColumnName("locked_at");
         builder.Property(e => e.LockedBy).HasColumnName("locked_by").HasMaxLength(200);
+        builder.Property(e => e.LockExpiresAt).HasColumnName("lock_expires_at");
         builder.Property(e => e.StartedAt).HasColumnName("started_at");
         builder.Property(e => e.CompletedAt).HasColumnName("completed_at");
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
@@ -30,6 +31,8 @@ public class WorkflowStepExecutionConfiguration : IEntityTypeConfiguration<Workf
 
         // Primary polling index: workers query Pending rows scheduled to run now
         builder.HasIndex(e => new { e.Status, e.ScheduledAt });
+        // Stuck-execution detection: find Running rows whose lock window expired
+        builder.HasIndex(e => new { e.Status, e.LockExpiresAt });
         builder.HasIndex(e => e.WorkflowInstanceId);
 
         builder.HasOne(e => e.WorkflowInstance)

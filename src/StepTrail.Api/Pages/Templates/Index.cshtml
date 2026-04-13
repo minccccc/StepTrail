@@ -1,0 +1,41 @@
+@page "/ops/templates"
+@model StepTrail.Api.Pages.Templates.IndexModel
+@{
+    ViewData["Title"] = "Workflow Templates";
+}
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+    <h1 class="h3 mb-0">Workflow Templates</h1>
+    <span class="text-muted small">Pre-built workflows ready to configure and run</span>
+</div>
+
+<div class="row g-4">
+    <div class="col-md-6 col-lg-4">
+        <div class="card shadow-sm h-100">
+            <div class="card-body d-flex flex-column">
+                <div class="d-flex align-items-center gap-2 mb-2">
+                    <span class="badge bg-secondary">HTTP</span>
+                    <span class="badge bg-light text-dark border">Webhook trigger</span>
+                </div>
+                <h5 class="card-title mb-1">Webhook → HTTP Call</h5>
+                <p class="card-text text-muted small flex-grow-1">
+                    Receives an external webhook and forwards the payload to a configurable
+                    HTTP endpoint. Retries up to 3 times on failure before alerting.
+                </p>
+                <div class="d-flex align-items-center gap-2 mt-3 small text-muted border-top pt-3">
+                    <span>Webhook trigger</span>
+                    <span>→</span>
+                    <span>HTTP call</span>
+                    <span>→</span>
+                    <span>Retry (×3)</span>
+                    <span>→</span>
+                    <span>Complete</span>
+                </div>
+                <a href="/ops/templates/setup?template=webhook-to-http-call"
+                   class="btn btn-primary btn-sm mt-3">
+                    Set up &amp; Run
+                </a>
+            </div>
+        </div>
+    </div>
+</div>

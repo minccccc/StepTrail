@@ -64,6 +64,8 @@ public sealed class WorkflowDefinitionSyncService : IHostedService
                     Order = step.Order,
                     MaxAttempts = step.MaxAttempts,
                     RetryDelaySeconds = step.RetryDelaySeconds,
+                    TimeoutSeconds = step.TimeoutSeconds,
+                    Config = step.Config,
                     CreatedAt = DateTimeOffset.UtcNow
                 });
             }
@@ -71,6 +73,56 @@ public sealed class WorkflowDefinitionSyncService : IHostedService
             await db.SaveChangesAsync(cancellationToken);
             _logger.LogInformation("Synced workflow definition '{Key}' v{Version} ({StepCount} steps)",
                 descriptor.Key, descriptor.Version, descriptor.Steps.Count);
+
+            if (descriptor.RecurrenceIntervalSeconds.HasValue)
+                await SyncRecurringScheduleAsync(db, definition, descriptor.RecurrenceIntervalSeconds.Value, cancellationToken);
+        }
+    }
+
+    private async Task SyncRecurringScheduleAsync(
+        StepTrailDbContext db,
+        WorkflowDefinition definition,
+        int intervalSeconds,
+        CancellationToken ct)
+    {
+        var existing = await db.RecurringWorkflowSchedules
+            .FirstOrDefaultAsync(s => s.WorkflowDefinitionId == definition.Id, ct);
+
+        if (existing is null)
+        {
+            var now = DateTimeOffset.UtcNow;
+            db.RecurringWorkflowSchedules.Add(new RecurringWorkflowSchedule
+            {
+                Id = Guid.NewGuid(),
+                WorkflowDefinitionId = definition.Id,
+                TenantId = TenantSeedService.DefaultTenantId,
+                IntervalSeconds = intervalSeconds,
+                IsEnabled = true,
+                NextRunAt = now,    // fire on next dispatcher poll
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+
+            await db.SaveChangesAsync(ct);
+            _logger.LogInformation(
+                "Created recurring schedule for '{Key}' — interval: {Interval}s",
+                definition.Key, intervalSeconds);
+        }
+        else if (existing.IntervalSeconds != intervalSeconds)
+        {
+            existing.IntervalSeconds = intervalSeconds;
+            existing.UpdatedAt = DateTimeOffset.UtcNow;
+
+            await db.SaveChangesAsync(ct);
+            _logger.LogInformation(
+                "Updated recurring schedule for '{Key}' — new interval: {Interval}s",
+                definition.Key, intervalSeconds);
+        }
+        else
+        {
+            _logger.LogDebug(
+                "Recurring schedule for '{Key}' already up to date — skipping",
+                definition.Key);
         }
     }
 

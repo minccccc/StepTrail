@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace StepTrail.Shared.Workflows;
 
 /// <summary>
@@ -10,7 +12,9 @@ public sealed class WorkflowStepDescriptor
         string stepType,
         int order,
         int maxAttempts = 3,
-        int retryDelaySeconds = 30)
+        int retryDelaySeconds = 30,
+        int? timeoutSeconds = null,
+        object? config = null)
     {
         if (string.IsNullOrWhiteSpace(stepKey))
             throw new ArgumentException("Step key must not be empty.", nameof(stepKey));
@@ -22,12 +26,16 @@ public sealed class WorkflowStepDescriptor
             throw new ArgumentOutOfRangeException(nameof(maxAttempts), "MaxAttempts must be at least 1.");
         if (retryDelaySeconds < 0)
             throw new ArgumentOutOfRangeException(nameof(retryDelaySeconds), "RetryDelaySeconds must be 0 or greater.");
+        if (timeoutSeconds is < 1)
+            throw new ArgumentOutOfRangeException(nameof(timeoutSeconds), "TimeoutSeconds must be 1 or greater when specified.");
 
         StepKey = stepKey;
         StepType = stepType;
         Order = order;
         MaxAttempts = maxAttempts;
         RetryDelaySeconds = retryDelaySeconds;
+        TimeoutSeconds = timeoutSeconds;
+        Config = config is null ? null : JsonSerializer.Serialize(config);
     }
 
     /// <summary>
@@ -56,4 +64,15 @@ public sealed class WorkflowStepDescriptor
     /// Fixed delay in seconds between a failed attempt and the next retry.
     /// </summary>
     public int RetryDelaySeconds { get; }
+
+    /// <summary>
+    /// Maximum seconds a single attempt may run. Null = no handler-level timeout.
+    /// </summary>
+    public int? TimeoutSeconds { get; }
+
+    /// <summary>
+    /// Handler-specific configuration serialized as JSON.
+    /// Passed to the handler at runtime via StepContext.Config.
+    /// </summary>
+    public string? Config { get; }
 }

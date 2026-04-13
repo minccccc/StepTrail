@@ -1,37 +1,50 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using StepTrail.Shared;
 using StepTrail.Shared.Entities;
 using StepTrail.Shared.Workflows;
+using StepTrail.Worker.Handlers;
 
 namespace StepTrail.Worker;
 
 /// <summary>
 /// Executes a claimed step execution: resolves the handler, runs it, and persists the outcome.
 /// On success, schedules the next step or completes the workflow if this was the last step.
-/// On failure, retries up to MaxAttempts times (with RetryDelaySeconds between attempts).
-/// Permanently fails the workflow once all attempts are exhausted.
+/// On failure or timeout, delegates to StepFailureService which applies the retry policy.
+/// Maintains a heartbeat (StepLeaseRenewer) during execution so healthy steps are never
+/// reclaimed by the StuckExecutionDetector.
 /// </summary>
 public sealed class StepExecutionProcessor
 {
     private readonly StepTrailDbContext _db;
     private readonly IServiceProvider _serviceProvider;
+    private readonly StepFailureService _failureService;
     private readonly ILogger<StepExecutionProcessor> _logger;
+    private readonly TimeSpan _heartbeatInterval;
+    private readonly TimeSpan _lockWindow;
 
     public StepExecutionProcessor(
         StepTrailDbContext db,
         IServiceProvider serviceProvider,
+        StepFailureService failureService,
+        IConfiguration configuration,
         ILogger<StepExecutionProcessor> logger)
     {
         _db = db;
         _serviceProvider = serviceProvider;
+        _failureService = failureService;
         _logger = logger;
+        _heartbeatInterval = TimeSpan.FromSeconds(
+            configuration.GetValue<int>("Worker:HeartbeatIntervalSeconds", 60));
+        _lockWindow = TimeSpan.FromSeconds(
+            configuration.GetValue<int>("Worker:DefaultLockExpirySeconds", 300));
     }
 
     public async Task ProcessAsync(WorkflowStepExecution execution, CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;
 
-        // Load the step definition for StepType and Order
+        // Load the step definition for StepType, Order, and TimeoutSeconds
         var stepDef = await _db.WorkflowDefinitionSteps
             .FindAsync([execution.WorkflowDefinitionStepId], ct)
             ?? throw new InvalidOperationException(
@@ -48,9 +61,10 @@ public sealed class StepExecutionProcessor
         });
         await _db.SaveChangesAsync(ct);
 
-        // Resolve handler and execute
+        // Resolve handler and execute, applying per-step timeout if configured
         string? output = null;
         string? error = null;
+        bool timedOut = false;
 
         try
         {
@@ -63,15 +77,61 @@ public sealed class StepExecutionProcessor
                 WorkflowInstanceId = execution.WorkflowInstanceId,
                 StepExecutionId = execution.Id,
                 StepKey = execution.StepKey,
-                Input = execution.Input
+                Input = execution.Input,
+                Config = stepDef.Config
             };
 
-            var result = await handler.ExecuteAsync(context, ct);
-            output = result.Output;
+            // Build an execution token: linked to the worker shutdown token,
+            // optionally cancelled after TimeoutSeconds.
+            CancellationTokenSource? timeoutCts = null;
+            var executionToken = ct;
+
+            if (stepDef.TimeoutSeconds.HasValue)
+            {
+                timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(stepDef.TimeoutSeconds.Value));
+                executionToken = timeoutCts.Token;
+            }
+
+            // Keep the lock alive while the handler runs so the StuckExecutionDetector
+            // does not reclaim this step. Disposed (cancelled) as soon as the handler returns.
+            var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
+            await using var lease = new StepLeaseRenewer(
+                execution.Id, scopeFactory, _heartbeatInterval, _lockWindow, _logger, ct);
+
+            try
+            {
+                var result = await handler.ExecuteAsync(context, executionToken);
+                output = result.Output;
+            }
+            finally
+            {
+                timeoutCts?.Dispose();
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            throw; // Let the worker loop handle shutdown cleanly
+            // Worker is shutting down — propagate so the loop can exit cleanly.
+            throw;
+        }
+        catch (OperationCanceledException) when (stepDef.TimeoutSeconds.HasValue)
+        {
+            // Timeout CTS fired; the handler exceeded its configured limit.
+            timedOut = true;
+            error = $"Step timed out after {stepDef.TimeoutSeconds.Value}s.";
+            _logger.LogWarning(
+                "Step {StepKey} (execution {ExecutionId}) timed out after {Timeout}s",
+                execution.StepKey, execution.Id, stepDef.TimeoutSeconds.Value);
+        }
+        catch (HttpActivityException ex)
+        {
+            // Non-2xx HTTP response: preserve the response output (status code + body)
+            // so it is persisted on the failed execution and visible in the timeline.
+            error  = ex.Message;
+            output = ex.ResponseOutput;
+            _logger.LogWarning(
+                "Step {StepKey} (execution {ExecutionId}) received non-2xx HTTP response",
+                execution.StepKey, execution.Id);
         }
         catch (Exception ex)
         {
@@ -86,7 +146,11 @@ public sealed class StepExecutionProcessor
         if (error is null)
             await PersistSuccessAsync(execution, stepDef, output, now, ct);
         else
-            await PersistFailureAsync(execution, stepDef, error, now, ct);
+            await _failureService.HandleAsync(
+                execution, stepDef, error,
+                timedOut ? WorkflowEventTypes.StepTimedOut : WorkflowEventTypes.StepFailed,
+                now, ct,
+                output);
     }
 
     private async Task PersistSuccessAsync(
@@ -160,90 +224,6 @@ public sealed class StepExecutionProcessor
             _logger.LogInformation(
                 "Step {StepKey} completed — workflow instance {InstanceId} is now Completed",
                 execution.StepKey, execution.WorkflowInstanceId);
-        }
-
-        await _db.SaveChangesAsync(ct);
-    }
-
-    private async Task PersistFailureAsync(
-        WorkflowStepExecution execution,
-        WorkflowDefinitionStep stepDef,
-        string error,
-        DateTimeOffset now,
-        CancellationToken ct)
-    {
-        execution.Status = WorkflowStepExecutionStatus.Failed;
-        execution.Error = error;
-        execution.CompletedAt = now;
-        execution.UpdatedAt = now;
-
-        _db.WorkflowEvents.Add(new WorkflowEvent
-        {
-            Id = Guid.NewGuid(),
-            WorkflowInstanceId = execution.WorkflowInstanceId,
-            StepExecutionId = execution.Id,
-            EventType = WorkflowEventTypes.StepFailed,
-            CreatedAt = now
-        });
-
-        if (execution.Attempt < stepDef.MaxAttempts)
-        {
-            // Retries remaining — schedule next attempt
-            var retryScheduledAt = now.AddSeconds(stepDef.RetryDelaySeconds);
-
-            var retryExecution = new WorkflowStepExecution
-            {
-                Id = Guid.NewGuid(),
-                WorkflowInstanceId = execution.WorkflowInstanceId,
-                WorkflowDefinitionStepId = execution.WorkflowDefinitionStepId,
-                StepKey = execution.StepKey,
-                Status = WorkflowStepExecutionStatus.Pending,
-                Attempt = execution.Attempt + 1,
-                Input = execution.Input,
-                ScheduledAt = retryScheduledAt,
-                CreatedAt = now,
-                UpdatedAt = now
-            };
-            _db.WorkflowStepExecutions.Add(retryExecution);
-
-            _db.WorkflowEvents.Add(new WorkflowEvent
-            {
-                Id = Guid.NewGuid(),
-                WorkflowInstanceId = execution.WorkflowInstanceId,
-                StepExecutionId = retryExecution.Id,
-                EventType = WorkflowEventTypes.StepRetryScheduled,
-                CreatedAt = now
-            });
-
-            _logger.LogWarning(
-                "Step {StepKey} attempt {Attempt}/{MaxAttempts} failed — retry {NextAttempt} scheduled at {RetryAt}",
-                execution.StepKey, execution.Attempt, stepDef.MaxAttempts,
-                execution.Attempt + 1, retryScheduledAt);
-        }
-        else
-        {
-            // All attempts exhausted — fail the workflow
-            var instance = await _db.WorkflowInstances
-                .FindAsync([execution.WorkflowInstanceId], ct)
-                ?? throw new InvalidOperationException(
-                    $"WorkflowInstance {execution.WorkflowInstanceId} not found.");
-
-            instance.Status = WorkflowInstanceStatus.Failed;
-            instance.CompletedAt = now;
-            instance.UpdatedAt = now;
-
-            _db.WorkflowEvents.Add(new WorkflowEvent
-            {
-                Id = Guid.NewGuid(),
-                WorkflowInstanceId = execution.WorkflowInstanceId,
-                StepExecutionId = null,
-                EventType = WorkflowEventTypes.WorkflowFailed,
-                CreatedAt = now
-            });
-
-            _logger.LogError(
-                "Step {StepKey} failed after {MaxAttempts} attempt(s) — workflow instance {InstanceId} is now Failed",
-                execution.StepKey, stepDef.MaxAttempts, execution.WorkflowInstanceId);
         }
 
         await _db.SaveChangesAsync(ct);

@@ -32,6 +32,19 @@ public class WorkflowDefinitionStep
     /// </summary>
     public int RetryDelaySeconds { get; set; } = 30;
 
+    /// <summary>
+    /// Maximum seconds a single attempt may run before it is cancelled with a timeout error.
+    /// Null means no explicit handler timeout — the lock expiry window still applies.
+    /// </summary>
+    public int? TimeoutSeconds { get; set; }
+
+    /// <summary>
+    /// Handler-specific configuration stored as JSON.
+    /// Passed to the handler via StepContext.Config so each handler type can define its own shape.
+    /// Example: HttpActivityHandler reads Url, Method, Headers, and Body from this field.
+    /// </summary>
+    public string? Config { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public WorkflowDefinition WorkflowDefinition { get; set; } = null!;

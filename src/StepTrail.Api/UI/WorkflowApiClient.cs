@@ -96,6 +96,32 @@ public sealed class WorkflowApiClient
         }
     }
 
+    public async Task<ApiActionResult> UpsertSecretAsync(
+        string name,
+        string value,
+        string? description,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _http.PutAsJsonAsync(
+                $"/secrets/{Uri.EscapeDataString(name)}",
+                new { value, description },
+                ct);
+
+            if (response.IsSuccessStatusCode)
+                return ApiActionResult.Ok();
+
+            var body = await response.Content.ReadAsStringAsync(ct);
+            return ApiActionResult.Fail(ExtractErrorMessage(body) ?? $"API returned {(int)response.StatusCode}.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error upserting secret {Name}", name);
+            return ApiActionResult.Fail("An unexpected error occurred. Check the application logs.");
+        }
+    }
+
     public async Task<ApiActionResult> RetryAsync(Guid id, CancellationToken ct = default)
         => await PostActionAsync($"/workflow-instances/{id}/retry", ct);
 

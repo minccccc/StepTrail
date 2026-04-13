@@ -17,4 +17,8 @@ public static class WorkflowEventTypes
     public const string WorkflowCancelled = "WorkflowCancelled";
     /// <summary>Instance moved to archive — hidden from default list view.</summary>
     public const string WorkflowArchived  = "WorkflowArchived";
+    /// <summary>Step handler exceeded its configured timeout and was cancelled.</summary>
+    public const string StepTimedOut      = "StepTimedOut";
+    /// <summary>Step was found in Running state with an expired lock — worker likely crashed.</summary>
+    public const string StepOrphaned      = "StepOrphaned";
 }

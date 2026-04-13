@@ -18,6 +18,12 @@ public sealed class StepContext
     public required Guid StepExecutionId { get; init; }
     public required string StepKey { get; init; }
     public string? Input { get; init; }
+
+    /// <summary>
+    /// Handler-specific configuration JSON, sourced from WorkflowDefinitionStep.Config.
+    /// Each handler type defines and deserializes its own config shape.
+    /// </summary>
+    public string? Config { get; init; }
 }
 
 /// <summary>

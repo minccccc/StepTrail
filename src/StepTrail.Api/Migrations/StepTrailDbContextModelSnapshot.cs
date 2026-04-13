@@ -57,6 +57,61 @@ namespace StepTrail.Api.Migrations
                     b.ToTable("idempotency_records", (string)null);
                 });
 
+            modelBuilder.Entity("StepTrail.Shared.Entities.RecurringWorkflowSchedule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Input")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("input");
+
+                    b.Property<int>("IntervalSeconds")
+                        .HasColumnType("integer")
+                        .HasColumnName("interval_seconds");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_enabled");
+
+                    b.Property<DateTimeOffset?>("LastRunAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_run_at");
+
+                    b.Property<DateTimeOffset>("NextRunAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_run_at");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid>("WorkflowDefinitionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("workflow_definition_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("WorkflowDefinitionId")
+                        .IsUnique();
+
+                    b.HasIndex("IsEnabled", "NextRunAt");
+
+                    b.ToTable("recurring_workflow_schedules", (string)null);
+                });
+
             modelBuilder.Entity("StepTrail.Shared.Entities.Tenant", b =>
                 {
                     b.Property<Guid>("Id")
@@ -161,6 +216,10 @@ namespace StepTrail.Api.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<string>("Config")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("config");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -188,6 +247,10 @@ namespace StepTrail.Api.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)")
                         .HasColumnName("step_type");
+
+                    b.Property<int?>("TimeoutSeconds")
+                        .HasColumnType("integer")
+                        .HasColumnName("timeout_seconds");
 
                     b.Property<Guid>("WorkflowDefinitionId")
                         .HasColumnType("uuid")
@@ -302,6 +365,45 @@ namespace StepTrail.Api.Migrations
                     b.ToTable("workflow_instances", (string)null);
                 });
 
+            modelBuilder.Entity("StepTrail.Shared.Entities.WorkflowSecret", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("description");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("value");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("workflow_secrets", (string)null);
+                });
+
             modelBuilder.Entity("StepTrail.Shared.Entities.WorkflowStepExecution", b =>
                 {
                     b.Property<Guid>("Id")
@@ -328,6 +430,10 @@ namespace StepTrail.Api.Migrations
                     b.Property<string>("Input")
                         .HasColumnType("jsonb")
                         .HasColumnName("input");
+
+                    b.Property<DateTimeOffset?>("LockExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lock_expires_at");
 
                     b.Property<DateTimeOffset?>("LockedAt")
                         .HasColumnType("timestamp with time zone")
@@ -380,6 +486,8 @@ namespace StepTrail.Api.Migrations
 
                     b.HasIndex("WorkflowInstanceId");
 
+                    b.HasIndex("Status", "LockExpiresAt");
+
                     b.HasIndex("Status", "ScheduledAt");
 
                     b.ToTable("workflow_step_executions", (string)null);
@@ -402,6 +510,25 @@ namespace StepTrail.Api.Migrations
                     b.Navigation("Tenant");
 
                     b.Navigation("WorkflowInstance");
+                });
+
+            modelBuilder.Entity("StepTrail.Shared.Entities.RecurringWorkflowSchedule", b =>
+                {
+                    b.HasOne("StepTrail.Shared.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("StepTrail.Shared.Entities.WorkflowDefinition", "WorkflowDefinition")
+                        .WithMany()
+                        .HasForeignKey("WorkflowDefinitionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+
+                    b.Navigation("WorkflowDefinition");
                 });
 
             modelBuilder.Entity("StepTrail.Shared.Entities.User", b =>

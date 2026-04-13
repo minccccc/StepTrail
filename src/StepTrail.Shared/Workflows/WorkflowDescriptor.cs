@@ -24,6 +24,12 @@ public abstract class WorkflowDescriptor
     public virtual string? Description => null;
 
     /// <summary>
+    /// When set, the recurring scheduler creates a new workflow instance every N seconds.
+    /// Null (default) means the workflow is not recurring.
+    /// </summary>
+    public virtual int? RecurrenceIntervalSeconds => null;
+
+    /// <summary>
     /// Ordered list of steps. Must have at least one step.
     /// </summary>
     public abstract IReadOnlyList<WorkflowStepDescriptor> Steps { get; }

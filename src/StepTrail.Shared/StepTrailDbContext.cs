@@ -18,6 +18,8 @@ public class StepTrailDbContext : DbContext
     public DbSet<WorkflowStepExecution> WorkflowStepExecutions => Set<WorkflowStepExecution>();
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
     public DbSet<WorkflowEvent> WorkflowEvents => Set<WorkflowEvent>();
+    public DbSet<RecurringWorkflowSchedule> RecurringWorkflowSchedules => Set<RecurringWorkflowSchedule>();
+    public DbSet<WorkflowSecret> WorkflowSecrets => Set<WorkflowSecret>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -31,5 +33,7 @@ public class StepTrailDbContext : DbContext
         modelBuilder.ApplyConfiguration(new WorkflowStepExecutionConfiguration());
         modelBuilder.ApplyConfiguration(new IdempotencyRecordConfiguration());
         modelBuilder.ApplyConfiguration(new WorkflowEventConfiguration());
+        modelBuilder.ApplyConfiguration(new RecurringWorkflowScheduleConfiguration());
+        modelBuilder.ApplyConfiguration(new WorkflowSecretConfiguration());
     }
 }

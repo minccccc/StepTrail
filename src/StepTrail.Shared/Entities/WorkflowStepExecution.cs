@@ -48,6 +48,12 @@ public class WorkflowStepExecution
     /// </summary>
     public string? LockedBy { get; set; }
 
+    /// <summary>
+    /// When the worker lock expires. Set at claim time based on the default lock window.
+    /// Executions still Running past this timestamp are treated as orphaned and requeued.
+    /// </summary>
+    public DateTimeOffset? LockExpiresAt { get; set; }
+
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
 

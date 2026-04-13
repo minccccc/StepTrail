@@ -1,72 +1,78 @@
 # Development Runbook
 
-This document covers local setup, startup behavior, and a few important operational notes.
+This document covers local setup, startup behavior, configuration, and current operational notes.
 
 ## Local Prerequisites
 
 - .NET 9 SDK
-- PostgreSQL
-- optional Docker for local PostgreSQL
-- VS Code if you want to use the provided debug configuration
+- PostgreSQL (or Docker for local PostgreSQL)
+- VS Code (optional — for the provided debug configuration)
 
 ## Repository Shape
 
 Relevant top-level folders:
 
-- `src`
-- `docs`
-- `condex-docs`
-
-Per your repository convention, this document set lives in `condex-docs` and does not modify `docs`.
+- `src` — solution projects
+- `docs` — architecture and authoring guides
+- `condex-docs` — code-aligned documentation set (this folder)
 
 ## Configuration
 
 ### API
 
-File:
-
-- `src/StepTrail.Api/appsettings.json`
+File: `src/StepTrail.Api/appsettings.json`
 
 Key settings:
 
-- `ConnectionStrings:StepTrailDb`
+| Key | Default | Description |
+|-----|---------|-------------|
+| `ConnectionStrings:StepTrailDb` | local Postgres | Database connection string |
+| `UI:ApiBaseUrl` | `http://localhost:5000` | Base URL for `WorkflowApiClient` loopback calls |
+| `Ops:Username` | `admin` | Ops console login username |
+| `Ops:Password` | `admin` | Ops console login password |
+
+Override credentials in non-local environments:
+
+```bash
+export Ops__Username=myuser
+export Ops__Password=a-strong-password
+```
 
 ### Worker
 
-File:
-
-- `src/StepTrail.Worker/appsettings.json`
+File: `src/StepTrail.Worker/appsettings.json`
 
 Key settings:
 
-- `ConnectionStrings:StepTrailDb`
-- `Worker:PollIntervalSeconds`
-
-Default poll interval:
-
-- `5` seconds
+| Key | Default | Description |
+|-----|---------|-------------|
+| `ConnectionStrings:StepTrailDb` | local Postgres | Database connection string |
+| `Worker:PollIntervalSeconds` | `5` | Seconds between polling loop iterations |
+| `Worker:HeartbeatIntervalSeconds` | `60` | Seconds between `StepLeaseRenewer` heartbeats |
+| `Worker:DefaultLockExpirySeconds` | `300` | Lock window granted on claim; renewed each heartbeat |
+| `Alerts:WebhookUrl` | `""` | Set to a non-empty URL to enable webhook failure alerts |
 
 ## Database Startup
 
-The repository currently assumes a PostgreSQL instance is available at:
+The repository assumes a PostgreSQL instance at:
 
-```text
+```
 Host=localhost;Port=5432;Database=steptrail;Username=steptrail;Password=steptrail
 ```
-
-There is no repo-owned Docker Compose file in the current solution, so local database startup is currently an external responsibility.
 
 Example Docker command:
 
 ```bash
-docker run -d ^
-  --name steptrail-postgres ^
-  -e POSTGRES_DB=steptrail ^
-  -e POSTGRES_USER=steptrail ^
-  -e POSTGRES_PASSWORD=steptrail ^
-  -p 5432:5432 ^
+docker run -d \
+  --name steptrail-postgres \
+  -e POSTGRES_DB=steptrail \
+  -e POSTGRES_USER=steptrail \
+  -e POSTGRES_PASSWORD=steptrail \
+  -p 5432:5432 \
   postgres:16
 ```
+
+If the container already exists: `docker start steptrail-postgres`
 
 ## Running The Solution
 
@@ -82,18 +88,12 @@ This is the easiest way to run both processes together.
 
 ### Option 2: Terminal
 
-API:
-
 ```bash
-cd src/StepTrail.Api
-dotnet run
-```
+# API (applies DB migrations automatically)
+cd src/StepTrail.Api && dotnet run
 
-Worker:
-
-```bash
-cd src/StepTrail.Worker
-dotnet run
+# Worker (separate terminal)
+cd src/StepTrail.Worker && dotnet run
 ```
 
 ## Startup Behavior
@@ -104,59 +104,93 @@ When the API starts, it:
 
 1. builds the web app
 2. exposes OpenAPI and Scalar
-3. applies pending EF Core migrations
-4. seeds the default tenant if missing
-5. syncs registered workflows into database metadata
-6. starts serving HTTP traffic
+3. registers cookie authentication
+4. applies pending EF Core migrations
+5. seeds the default tenant if missing
+6. syncs registered workflows and recurring schedules into database metadata
+7. seeds sample data if `ASPNETCORE_ENVIRONMENT=Development` (`DevDataSeedService`)
+8. starts serving HTTP traffic
 
 ### Worker startup
 
 When the worker starts, it:
 
 1. builds the host
-2. registers step handlers
-3. starts polling for due step executions
+2. registers step handlers and supporting services
+3. starts the polling loop — each iteration:
+   - dispatches due recurring workflow schedules
+   - recovers orphaned executions with expired leases
+   - claims and processes one due step execution
 
 ## Migrations
 
-Migrations live in:
+Migrations live in `src/StepTrail.Api/Migrations/`.
 
-- `src/StepTrail.Api/Migrations`
+The API applies pending migrations automatically on startup. No manual migration step is needed for local development.
 
-The API applies pending migrations automatically on startup.
+To add a new migration after changing entities:
 
-This keeps local setup simpler because there is no separate migration execution step before running the app.
+```bash
+dotnet ef migrations add YourMigrationName \
+  --project src/StepTrail.Api \
+  --startup-project src/StepTrail.Api
+```
+
+Current migrations:
+
+| Migration | Change |
+|-----------|--------|
+| `InitialSchema` | Base tables and constraints |
+| `RemoveTenantFromWorkflowDefinition` | Definitions made global |
+| `AddRetryPolicyToWorkflowDefinitionStep` | `max_attempts`, `retry_delay_seconds` |
+| `AddTimeoutAndLockExpiry` | `timeout_seconds`, `lock_expires_at`, `started_at` |
+| `AddRecurringWorkflowSchedules` | `recurring_workflow_schedules` table |
+| `AddStepConfig` | `config` on definition steps |
+| `AddWorkflowSecrets` | `workflow_secrets` table |
 
 ## Operational Checks
 
-Useful checks while developing:
+Useful endpoints while developing:
 
-- `GET /health`
-- `GET /workflows`
-- `GET /workflow-instances`
-- `GET /workflow-instances/{id}/timeline`
+- `GET /health` — database connectivity
+- `GET /workflows` — registered workflow definitions
+- `GET /workflow-instances` — instance list
+- `GET /workflow-instances/{id}/timeline` — event history for one instance
+- `GET /secrets` — list configured secret names
 
-Useful UI entry point:
+Useful local URLs:
 
-- `http://localhost:5000/scalar/v1`
+- Scalar UI: `http://localhost:5000/scalar/v1`
+- Ops login: `http://localhost:5000/login` (default: `admin` / `admin`)
+- Ops console: `http://localhost:5000/ops/workflows`
+- Template setup: `http://localhost:5000/ops/templates`
+
+## First-Time Template Setup
+
+To test the `webhook-to-http-call` template end-to-end:
+
+1. Navigate to `http://localhost:5000/ops/templates`
+2. Click **Set up & Run** on the Webhook → HTTP Call card
+3. Enter a target URL (e.g. a `https://webhook.site` receiver) and click **Save & Run Now**
+4. The wizard saves the secret and starts an instance — you are redirected to the details page
+
+For subsequent triggers without the wizard:
+
+```bash
+curl -X POST http://localhost:5000/webhooks/webhook-to-http-call \
+  -H "Content-Type: application/json" \
+  -d '{"event": "test"}'
+```
 
 ## Current Known Limitations
 
 These are worth knowing before building on top of the current code:
 
-- there are no automated test projects in the solution yet
-- workflow replay currently starts from the first step, not an arbitrary chosen step
-- step input propagation is simple and currently oriented around stored JSON payloads
-- stale `Running` work recovery is not yet documented as a dedicated recovery mechanism
-- the database is assumed to be available externally; local DB provisioning is not yet owned by the repo
-
-## Recommended Next Use Of These Docs
-
-If you are:
-
-- implementing backend changes:
-  start with `architecture-overview.md` and `runtime-and-lifecycle.md`
-- building a UI:
-  start with `api-and-integration.md`
-- debugging production-like behavior locally:
-  start with `data-model.md` and the timeline endpoints
+- there are no automated test projects in the solution
+- workflow replay currently restarts from step 1 only; there is no arbitrary-step replay
+- step timeout enforcement is cooperative — a handler that ignores the `CancellationToken` cannot be force-terminated; orphan recovery only kicks in after the lock expires (default 5 minutes)
+- if `RecurrenceIntervalSeconds` is added to an existing workflow descriptor without bumping the version, the recurring schedule is not created (the definition already exists and the sync is skipped); bump the version to trigger re-sync
+- if a `recurring_workflow_schedules` row is manually deleted from the database, it is not automatically recreated on the next startup for an already-synced definition
+- the committed ops credentials (`admin`/`admin`) must be overridden via `Ops__Username` and `Ops__Password` environment variables before any non-local deployment
+- secrets are global — not tenant-scoped
+- the webhook endpoint silently discards malformed JSON bodies and starts the workflow with null input rather than returning `400 Bad Request`

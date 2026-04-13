@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using StepTrail.Shared;
 using StepTrail.Shared.Entities;
 
@@ -11,10 +12,12 @@ namespace StepTrail.Worker;
 public sealed class StepExecutionClaimer
 {
     private readonly StepTrailDbContext _db;
+    private readonly int _defaultLockExpirySeconds;
 
-    public StepExecutionClaimer(StepTrailDbContext db)
+    public StepExecutionClaimer(StepTrailDbContext db, IConfiguration configuration)
     {
         _db = db;
+        _defaultLockExpirySeconds = configuration.GetValue<int>("Worker:DefaultLockExpirySeconds", 300);
     }
 
     /// <summary>
@@ -53,6 +56,7 @@ public sealed class StepExecutionClaimer
             execution.Status = WorkflowStepExecutionStatus.Running;
             execution.LockedAt = now;
             execution.LockedBy = workerId;
+            execution.LockExpiresAt = now.AddSeconds(_defaultLockExpirySeconds);
             execution.StartedAt = now;
             execution.UpdatedAt = now;
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-StepTrail is a workflow orchestration engine. It allows you to define multi-step background processes as code-first workflow descriptors, start instances of those workflows via a REST API, and execute each step reliably through a background worker service — with automatic retries, full event history, and manual recovery operations.
+StepTrail is a workflow orchestration engine. It allows you to define multi-step background processes as code-first workflow descriptors, start instances of those workflows via REST API or webhook, and execute each step reliably through a background worker service — with automatic retries, configurable timeouts, orphan detection, recurring schedules, outbound HTTP activity steps, secrets management, operational alerting, and a browser-based operations console.
 
 The system is intentionally simple: **PostgreSQL is the coordination layer**. There is no message queue, no in-process scheduler, no distributed cache. All state lives in the database, and workers coordinate via database-level row locking.
 
@@ -11,51 +11,67 @@ The system is intentionally simple: **PostgreSQL is the coordination layer**. Th
 ## System Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Clients                               │
-│              (REST calls, other services, UI)                │
-└────────────────────────┬────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│             External Callers / Browser                           │
+│         (webhook senders, ops console users)                     │
+└────────────────────────┬────────────────────────────────────────┘
                          │ HTTP
                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     StepTrail.Api                            │
-│                                                              │
-│  Startup services:                                           │
-│    TenantSeedService          (seeds dev tenant)             │
-│    WorkflowDefinitionSyncService  (code → DB sync)           │
-│                                                              │
-│  Request services:                                           │
-│    WorkflowInstanceService    (start, idempotency)           │
-│    WorkflowQueryService       (list, detail, timeline)       │
-│    WorkflowRetryService       (retry, replay)                │
-│                                                              │
-│  8 REST endpoints                                            │
-│  Scalar UI at /scalar/v1                                     │
-└────────────────────────┬────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                     StepTrail.Api                                │
+│                                                                  │
+│  Startup services:                                               │
+│    TenantSeedService              (seeds dev tenant)             │
+│    WorkflowDefinitionSyncService  (code → DB sync, schedules)    │
+│    DevDataSeedService             (dev-only sample data)         │
+│                                                                  │
+│  Request services:                                               │
+│    WorkflowInstanceService   (start, idempotency)                │
+│    WorkflowQueryService      (list, detail, timeline)            │
+│    WorkflowRetryService      (retry, replay, archive, cancel)    │
+│                                                                  │
+│  HTTP surface:                                                   │
+│    Public: GET /health, POST /webhooks/{key}                     │
+│    Ops API (auth required): /workflows, /workflow-instances/*,   │
+│                             /secrets                             │
+│    Ops UI (auth required):  /ops/** Razor Pages                  │
+│    Auth:  GET /login, POST /logout                               │
+│    Docs:  /openapi/v1.json, /scalar/v1                           │
+└────────────────────────┬────────────────────────────────────────┘
                          │ EF Core / Npgsql
                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      PostgreSQL                              │
-│                                                              │
-│   tenants                 workflow_definitions               │
-│   users                   workflow_definition_steps          │
-│   workflow_instances      workflow_step_executions           │
-│   workflow_events         idempotency_records                │
-└────────────────────────┬────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                      PostgreSQL                                  │
+│                                                                  │
+│  tenants                    workflow_definitions                  │
+│  users                      workflow_definition_steps            │
+│  workflow_instances         workflow_step_executions             │
+│  workflow_events            idempotency_records                  │
+│  recurring_workflow_schedules                                    │
+│  workflow_secrets                                                │
+└────────────────────────┬────────────────────────────────────────┘
                          │ EF Core / Npgsql
                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    StepTrail.Worker                          │
-│                                                              │
-│  Worker (BackgroundService)                                  │
-│    └── StepExecutionClaimer   (SELECT FOR UPDATE SKIP LOCKED)│
-│    └── StepExecutionProcessor (resolve handler, run, persist)│
-│                                                              │
-│  Step Handlers (keyed DI):                                   │
-│    SendWelcomeEmailHandler                                   │
-│    ProvisionAccountHandler                                   │
-│    NotifyTeamHandler                                         │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    StepTrail.Worker                              │
+│                                                                  │
+│  Worker (BackgroundService) per-loop:                            │
+│    RecurringWorkflowDispatcher  (SELECT FOR UPDATE SKIP LOCKED)  │
+│    StuckExecutionDetector       (orphan recovery)                │
+│    StepExecutionClaimer         (SELECT FOR UPDATE SKIP LOCKED)  │
+│    StepExecutionProcessor       (resolve handler, run, persist)  │
+│    StepLeaseRenewer             (heartbeat during execution)     │
+│                                                                  │
+│  Step Handlers (keyed DI):                                       │
+│    SendWelcomeEmailHandler                                       │
+│    ProvisionAccountHandler                                       │
+│    NotifyTeamHandler                                             │
+│    HttpActivityHandler          (outbound HTTP calls)            │
+│                                                                  │
+│  Support services:                                               │
+│    SecretResolver               ({{secrets.name}} substitution)  │
+│    AlertService / IAlertChannel (failure notifications)          │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -66,34 +82,33 @@ The system is intentionally simple: **PostgreSQL is the coordination layer**. Th
 
 A class library referenced by both the API and the Worker. Contains everything that needs to be shared:
 
-- **Domain entities** — the 8 EF Core entity classes that map to DB tables
+- **Domain entities** — 10 EF Core entity classes mapping to DB tables
 - **Entity configurations** — EF Core Fluent API config (column names, constraints, indexes)
-- **DbContext** — `StepTrailDbContext` with all 8 `DbSet<T>` properties
+- **DbContext** — `StepTrailDbContext` with all 10 `DbSet<T>` properties
 - **Workflow abstractions** — `WorkflowDescriptor`, `WorkflowStepDescriptor`, `IWorkflowRegistry`, `IStepHandler`, `StepContext`, `StepResult`
 - **DI helpers** — extension methods `AddWorkflow<T>()`, `AddWorkflowRegistry()`, `AddStepTrailDb()`
 
-Nothing in Shared has any business logic. It is pure infrastructure and contracts.
-
 ### StepTrail.Api
 
-An ASP.NET Core Minimal API application. Responsibilities:
+An ASP.NET Core application (Minimal API + Razor Pages). Responsibilities:
 
-- **Schema ownership** — holds EF Core migrations, applies them on startup via `db.Database.MigrateAsync()`
-- **Workflow registry** — syncs code-first workflow definitions to the DB at startup
-- **Instance lifecycle** — starting instances, idempotency, manual retry/replay
-- **Read API** — paginated list, instance detail, timeline queries
+- **Schema ownership** — EF Core migrations, applied on startup via `db.Database.MigrateAsync()`
+- **Workflow registry** — syncs code-first workflow definitions and recurring schedules to the DB at startup
+- **Instance lifecycle** — starting instances (via REST or webhook), idempotency, manual retry/replay/archive/cancel
+- **Secrets management** — CRUD for named workflow secrets (values never returned by API)
+- **Ops console** — cookie-authenticated Razor Pages UI at `/ops/**`
 - **API documentation** — OpenAPI spec + Scalar UI
 
 The API does not execute steps. It only creates and queries state.
 
 ### StepTrail.Worker
 
-A .NET Worker Service (`BackgroundService`). Responsibilities:
+A .NET Worker Service (`BackgroundService`). Each loop iteration:
 
-- **Polling** — continuously checks for `Pending` step executions that are due (`scheduled_at <= now`)
-- **Claiming** — atomically claims one execution at a time using `SELECT ... FOR UPDATE SKIP LOCKED`
-- **Executing** — resolves the step handler by type name, runs it, captures output or error
-- **Persisting** — writes the result back (success or failure), schedules the next step or retry, or marks the workflow complete/failed
+1. **Dispatches recurring schedules** — `RecurringWorkflowDispatcher` creates new instances for any enabled schedules whose `next_run_at` is due
+2. **Recovers orphaned steps** — `StuckExecutionDetector` requeues `Running` executions whose lease has expired (worker crash recovery)
+3. **Claims and executes one step** — `StepExecutionClaimer` atomically claims a `Pending` execution; `StepExecutionProcessor` runs it with lease renewal and optional per-step timeout
+4. **Fires alerts** — `AlertService` notifies configured channels on permanent failure or orphaned steps
 
 The Worker has no REST endpoints and does not own the database schema.
 
@@ -103,162 +118,121 @@ The Worker has no REST endpoints and does not own the database schema.
 
 ### 1. PostgreSQL as the Coordination Layer
 
-There is no message queue (no RabbitMQ, no Azure Service Bus, no Kafka). The database is the source of truth and the coordination mechanism. Workers compete to claim rows using `SELECT ... FOR UPDATE SKIP LOCKED`, which is a battle-tested pattern for work queues directly in PostgreSQL.
-
-**Benefits:**
-- No additional infrastructure to operate
-- Transactional — claiming and writing results happen in the same DB transaction
-- Simple operational model — if something goes wrong, you can inspect and fix state directly in the database
-
-**Trade-offs:**
-- Throughput is bounded by database polling (suitable for hundreds/thousands of executions per minute, not millions)
-- All workers must be able to reach PostgreSQL
+There is no message queue. Workers compete to claim rows using `SELECT ... FOR UPDATE SKIP LOCKED`, which is a battle-tested pattern for work queues directly in PostgreSQL. Recurring schedule dispatch, orphan detection, and step claiming all use this same pattern.
 
 ### 2. Code-First Workflow Definitions
 
-Workflows are defined as C# classes that extend `WorkflowDescriptor`. They are not stored as YAML, JSON, or BPMN. At startup, `WorkflowDefinitionSyncService` reads all registered descriptors from the DI container and idempotently writes them to the `workflow_definitions` and `workflow_definition_steps` tables.
-
-This means workflow definitions are **versioned in source control**, not in the database. The database copy is a derived artifact — a projection of the code.
+Workflows extend `WorkflowDescriptor`. At startup, `WorkflowDefinitionSyncService` idempotently writes them to the `workflow_definitions` and `workflow_definition_steps` tables, including step config JSON and timeout settings.
 
 ```csharp
-// Example: src/StepTrail.Api/Workflows/UserOnboardingWorkflow.cs
-public sealed class UserOnboardingWorkflow : WorkflowDescriptor
+public sealed class WebhookToHttpCallWorkflow : WorkflowDescriptor
 {
-    public override string Key => "user-onboarding";
-    public override int Version => 1;
-    public override string Name => "User Onboarding";
+    public override string Key     => "webhook-to-http-call";
+    public override int    Version => 1;
+    public override string Name    => "Webhook → HTTP Call";
+
     public override IReadOnlyList<WorkflowStepDescriptor> Steps =>
     [
-        new("send-welcome-email",  nameof(SendWelcomeEmailHandler),  order: 1),
-        new("provision-account",   nameof(ProvisionAccountHandler),  order: 2),
-        new("notify-team",         nameof(NotifyTeamHandler),         order: 3)
+        new WorkflowStepDescriptor(
+            stepKey:           "http-call",
+            stepType:          "HttpActivityHandler",
+            order:             1,
+            maxAttempts:       3,
+            retryDelaySeconds: 30,
+            timeoutSeconds:    30,
+            config: new { Url = "{{secrets.webhook-to-http-call-url}}", Method = "POST" })
     ];
 }
 ```
 
-When you need to change a workflow, bump the `Version`. Old and new versions can coexist in the database; `FindLatest` always picks the highest version.
+Bumping `Version` creates a new definition row; old versions continue running existing instances.
 
-### 3. Idempotency
+### 3. Per-Step Timeout Enforcement
 
-`POST /workflow-instances` accepts an optional `IdempotencyKey`. If a request arrives with a key that has already been used by the same tenant, the existing instance is returned instead of creating a new one.
+Each step definition carries an optional `TimeoutSeconds`. The processor creates a `CancellationTokenSource.CancelAfter(...)` linked to the worker shutdown token and passes it to the handler. A `StepLeaseRenewer` heartbeats `lock_expires_at` in the background to prevent the `StuckExecutionDetector` from treating a legitimately slow step as an orphan. Timeout cancellation is cooperative — any handler that awaits the CT will be cancelled; a truly blocking handler cannot be forcibly terminated.
 
-This is implemented via:
-1. A `UNIQUE` constraint on `(tenant_id, idempotency_key)` in `idempotency_records`
-2. A pre-check before insert (handles the common case)
-3. A catch on `PostgresException { SqlState: "23505" }` after insert (handles the concurrent race case)
+### 4. Orphan Recovery
 
-The database constraint is the safety net; the pre-check is the fast path.
+If a worker process crashes mid-execution, the lease heartbeat stops. `StuckExecutionDetector` scans for `Running` rows with `lock_expires_at <= now` and re-queues them via the normal failure/retry path (event type `StepOrphaned`).
 
-### 4. Distributed Worker Safety
+### 5. Secrets and Placeholder Resolution
 
-Multiple workers can run simultaneously without any additional coordination. The key is the PostgreSQL advisory-lock pattern:
+Named secrets are stored encrypted at rest in `workflow_secrets`. Step configurations can reference them as `{{secrets.name}}`. `SecretResolver` in the worker batch-loads referenced secrets from the DB and substitutes them before executing the step — secrets are never persisted in step config or execution rows.
 
-```sql
-SELECT * FROM workflow_step_executions
-WHERE status = 'Pending' AND scheduled_at <= now()
-ORDER BY scheduled_at ASC
-LIMIT 1
-FOR UPDATE SKIP LOCKED
-```
+### 6. Recurring Workflows
 
-`FOR UPDATE` places a row-level lock. `SKIP LOCKED` means concurrent workers skip already-locked rows instead of waiting. Each worker atomically claims exactly one execution.
+A `WorkflowDescriptor` can declare `RecurrenceIntervalSeconds`. `WorkflowDefinitionSyncService` creates a `recurring_workflow_schedules` row on first sync. `RecurringWorkflowDispatcher` (worker) polls that table, fires new instances for due schedules, and advances `next_run_at`.
 
-### 5. Step-to-Step Data Flow
+### 7. Webhook Trigger
 
-Step handlers receive a `StepContext` containing the previous step's output as `Input` (a JSON string). When a step succeeds, its `Output` becomes the `Input` of the next step execution row created in the database. Handlers are stateless — all state is passed through the database.
+`POST /webhooks/{workflowKey}` is an unauthenticated public endpoint that starts a workflow instance. The full JSON request body becomes the first step's input. Idempotency and external correlation keys are supplied as HTTP headers.
 
-```
-step 1 handler → Output: "{ userId: 42 }"
-                          ↓ stored in DB
-step 2 handler ← Input:  "{ userId: 42 }"
-```
+### 8. Operational Alerts
 
-### 6. Event Log
+`AlertService` fans out to all registered `IAlertChannel` implementations after `WorkflowFailed` or `StepOrphaned` events. `ConsoleLogAlertChannel` is always active. `WebhookAlertChannel` is registered when `Alerts:WebhookUrl` is configured. Channel failures are logged and never propagate.
 
-Every state transition appends a row to `workflow_events`. Events are append-only and never deleted. The full timeline of a workflow instance — from start to completion, including retries — is always queryable via `GET /workflow-instances/{id}/timeline`.
+### 9. Ops Console Authentication
 
-Event types: `WorkflowStarted`, `StepStarted`, `StepCompleted`, `StepFailed`, `StepRetryScheduled`, `WorkflowCompleted`, `WorkflowFailed`, `WorkflowRetried`, `WorkflowReplayed`
+All Razor Pages under `/ops/**` and all ops API endpoints require a valid session cookie. `ForwardAuthCookieHandler` (a `DelegatingHandler` on `WorkflowApiClient`) copies the browser cookie onto loopback API calls so the same-process REST layer is also authenticated. Credentials are stored in `Ops:Username` / `Ops:Password` config, overridable via environment variables.
 
-### 7. Retry Policy
+### 10. Idempotency
 
-Each step definition carries its own `MaxAttempts` (default: 3) and `RetryDelaySeconds` (default: 30). These are set at workflow definition time, not at runtime.
+`POST /workflow-instances` accepts an optional `IdempotencyKey`. Duplicate requests return the original instance. Implemented via a `UNIQUE` constraint on `(tenant_id, idempotency_key)` backed by a pre-check + catch on `PostgresException { SqlState: "23505" }`.
 
-When a step fails:
-- If `attempt < MaxAttempts`: a new `WorkflowStepExecution` row is created with `attempt + 1` and `ScheduledAt = now + RetryDelaySeconds`. The worker will pick it up after the delay.
-- If `attempt == MaxAttempts`: the workflow instance is marked `Failed`.
+### 11. Step-to-Step Data Flow
 
-Manual retry (`POST /workflow-instances/{id}/retry`) resets the attempt counter to 1 and reschedules from the last failed step. Manual replay (`POST /workflow-instances/{id}/replay`) resets to step 1.
-
-Both manual operations use `SELECT ... FOR UPDATE` (without `SKIP LOCKED`) to prevent concurrent duplicates — a second request blocks until the first commits, then sees the updated state and returns 409 Conflict.
+Step handlers receive a `StepContext` containing the previous step's output as `Input` (a JSON string). On success, `Output` becomes the `Input` of the next step. On `HttpActivityHandler` failure, the HTTP response status + body are persisted as `Output` even on the failed execution row — useful for diagnosing what the remote server returned.
 
 ---
 
 ## Execution Lifecycle
 
 ```
-Client                    API                      DB                       Worker
-  │                        │                        │                          │
-  │  POST /workflow-       │                        │                          │
-  │  instances ──────────► │                        │                          │
-  │                        │  validate tenant       │                          │
-  │                        │  check idempotency ──► │                          │
-  │                        │  insert instance       │                          │
-  │                        │  insert step exec ──── ▼                          │
-  │                        │  insert event    (Pending, Attempt 1)             │
-  │  201 Created ◄──────── │                        │                          │
-  │                        │                        │  poll (every 5s) ◄────── │
-  │                        │                        │  SELECT FOR UPDATE       │
-  │                        │                        │  SKIP LOCKED ──────────► │
-  │                        │                        │  (claims execution)      │
-  │                        │                        │  step → Running ◄─────── │
-  │                        │                        │  instance → Running      │
-  │                        │                        │  StepStarted event       │
-  │                        │                        │                          │
-  │                        │                        │  handler.ExecuteAsync()  │
-  │                        │                        │  [success]               │
-  │                        │                        │  step → Completed ◄───── │
-  │                        │                        │  Output stored           │
-  │                        │                        │  StepCompleted event     │
-  │                        │                        │  next step inserted      │
-  │                        │                        │  (or instance Completed) │
-  │                        │                        │                          │
-  │  GET /workflow-        │                        │                          │
-  │  instances/{id} ─────► │  query DB ───────────► │                          │
-  │  (Completed) ◄──────── │ ◄───────────────────── │                          │
+Client / Webhook                API                      DB                       Worker
+  │                              │                        │                          │
+  │  POST /webhooks/wf-key ────► │                        │                          │
+  │   (or POST /workflow-        │  validate              │                          │
+  │    instances)                │  check idempotency ──► │                          │
+  │                              │  insert instance       │                          │
+  │                              │  insert step exec ──── ▼                          │
+  │                              │  insert event    (Pending, Attempt 1)             │
+  │  201 Created ◄────────────── │                        │                          │
+  │                              │                        │  per-loop:               │
+  │                              │                        │  1. dispatch recurring   │
+  │                              │                        │  2. recover orphans      │
+  │                              │                        │  3. SELECT FOR UPDATE    │
+  │                              │                        │     SKIP LOCKED ───────► │
+  │                              │                        │  step → Running          │
+  │                              │                        │  StepStarted event       │
+  │                              │                        │                          │
+  │                              │                        │  lease renewer heartbeat │
+  │                              │                        │  handler.ExecuteAsync()  │
+  │                              │                        │  [success]               │
+  │                              │                        │  step → Completed ◄───── │
+  │                              │                        │  Output stored           │
+  │                              │                        │  StepCompleted event     │
+  │                              │                        │  next step inserted      │
+  │                              │                        │  (or instance Completed) │
 ```
 
-### Failure Path
+### Failure / Timeout Path
 
 ```
-  [handler throws exception]
-  step → Failed  ◄──────────────────────────────── Worker
-  StepFailed event
+  [handler throws, times out, or orphan detected]
+  step → Failed, error + output stored
+  StepFailed / StepTimedOut / StepOrphaned event
   if attempt < MaxAttempts:
-    new execution (Attempt+1, ScheduledAt = now+delay)
+    new execution (Attempt+1, ScheduledAt = now + RetryDelaySeconds)
     StepRetryScheduled event
   else:
     instance → Failed
     WorkflowFailed event
+    AlertService.SendAsync("WorkflowFailed", ...)
 ```
 
 ---
 
 ## Database Schema
-
-### Entity Relationship
-
-```
-tenants
-  ├── users                     (tenant_id FK)
-  ├── workflow_instances         (tenant_id FK)
-  │     ├── workflow_step_executions  (workflow_instance_id FK)
-  │     └── workflow_events           (workflow_instance_id FK)
-  └── idempotency_records        (tenant_id FK)
-
-workflow_definitions
-  ├── workflow_definition_steps  (workflow_definition_id FK)
-  └── workflow_instances         (workflow_definition_id FK)
-```
 
 ### Tables
 
@@ -294,10 +268,12 @@ workflow_definitions
 | `id` | `uuid` | PK |
 | `workflow_definition_id` | `uuid` | FK → workflow_definitions |
 | `step_key` | `varchar(200)` | UNIQUE per definition |
-| `step_type` | `varchar(500)` | Handler class name (keyed DI key) |
+| `step_type` | `varchar(500)` | handler class name (keyed DI key) |
 | `order` | `int` | UNIQUE per definition, 1-based |
-| `max_attempts` | `int` | Default 3 |
-| `retry_delay_seconds` | `int` | Default 30 |
+| `max_attempts` | `int` | default 3 |
+| `retry_delay_seconds` | `int` | default 30 |
+| `timeout_seconds` | `int` | nullable — per-step execution timeout |
+| `config` | `jsonb` | nullable — handler-specific configuration |
 | `created_at` | `timestamptz` | |
 
 #### `workflow_instances`
@@ -308,7 +284,7 @@ workflow_definitions
 | `workflow_definition_id` | `uuid` | FK → workflow_definitions |
 | `external_key` | `varchar(500)` | nullable, caller-provided business key |
 | `idempotency_key` | `varchar(500)` | nullable, deduplication key |
-| `status` | `varchar(50)` | Pending / Running / Completed / Failed / Cancelled |
+| `status` | `varchar(50)` | Pending / Running / Completed / Failed / Cancelled / Archived |
 | `input` | `jsonb` | nullable |
 | `created_at` | `timestamptz` | |
 | `updated_at` | `timestamptz` | |
@@ -324,17 +300,19 @@ workflow_definitions
 | `status` | `varchar(50)` | Pending / Running / Completed / Failed / Cancelled |
 | `attempt` | `int` | 1-based, increments per retry |
 | `input` | `jsonb` | nullable |
-| `output` | `jsonb` | nullable, populated on success |
-| `error` | `text` | nullable, populated on failure |
+| `output` | `jsonb` | nullable — set on success **and** on `HttpActivityHandler` failure |
+| `error` | `text` | nullable, set on failure |
 | `scheduled_at` | `timestamptz` | when worker may pick it up |
 | `locked_at` | `timestamptz` | nullable, when worker claimed it |
 | `locked_by` | `varchar(200)` | nullable, worker ID |
+| `lock_expires_at` | `timestamptz` | nullable, renewed by StepLeaseRenewer |
 | `started_at` | `timestamptz` | nullable, when handler began |
 | `completed_at` | `timestamptz` | nullable |
 | `created_at` | `timestamptz` | |
 | `updated_at` | `timestamptz` | |
 
-**Critical index:** `(status, scheduled_at)` — this is the index the worker uses for every poll.
+**Critical index:** `(status, scheduled_at)` — used by the worker's claim query on every poll.
+**Lock index:** `(status, lock_expires_at)` — used by `StuckExecutionDetector`.
 
 #### `workflow_events`
 | Column | Type | Notes |
@@ -342,7 +320,7 @@ workflow_definitions
 | `id` | `uuid` | PK |
 | `workflow_instance_id` | `uuid` | FK → workflow_instances |
 | `step_execution_id` | `uuid` | nullable FK → workflow_step_executions |
-| `event_type` | `varchar(100)` | see event type constants |
+| `event_type` | `varchar(100)` | see event types below |
 | `payload` | `jsonb` | nullable |
 | `created_at` | `timestamptz` | |
 
@@ -355,19 +333,67 @@ workflow_definitions
 | `workflow_instance_id` | `uuid` | FK → workflow_instances |
 | `created_at` | `timestamptz` | |
 
+#### `recurring_workflow_schedules`
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `uuid` | PK |
+| `workflow_definition_id` | `uuid` | UNIQUE FK → workflow_definitions |
+| `tenant_id` | `uuid` | FK → tenants |
+| `interval_seconds` | `int` | repeat interval |
+| `is_enabled` | `bool` | disabling pauses dispatch without deletion |
+| `input` | `jsonb` | nullable, forwarded to each new instance |
+| `last_run_at` | `timestamptz` | nullable |
+| `next_run_at` | `timestamptz` | when dispatcher next fires this schedule |
+| `created_at` | `timestamptz` | |
+| `updated_at` | `timestamptz` | |
+
+**Index:** `(is_enabled, next_run_at)` — used by `RecurringWorkflowDispatcher`.
+
+#### `workflow_secrets`
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `uuid` | PK |
+| `name` | `varchar(200)` | UNIQUE — used in `{{secrets.name}}` placeholders |
+| `value` | `text` | secret value — never returned by any API endpoint |
+| `description` | `varchar(500)` | nullable |
+| `created_at` | `timestamptz` | |
+| `updated_at` | `timestamptz` | |
+
+### Event Types
+
+| Event | Level | Description |
+|-------|-------|-------------|
+| `WorkflowStarted` | instance | new instance created |
+| `StepStarted` | step | handler began executing |
+| `StepCompleted` | step | handler succeeded |
+| `StepFailed` | step | handler threw an exception |
+| `StepTimedOut` | step | handler exceeded `TimeoutSeconds` |
+| `StepOrphaned` | step | lease expired without completion (worker crash) |
+| `StepRetryScheduled` | step | new attempt queued after failure |
+| `WorkflowCompleted` | instance | all steps completed |
+| `WorkflowFailed` | instance | step exhausted all attempts |
+| `WorkflowRetried` | instance | manual retry from last failed step |
+| `WorkflowReplayed` | instance | manual replay from step 1 |
+| `WorkflowCancelled` | instance | manually cancelled |
+| `WorkflowArchived` | instance | manually archived |
+
 ---
 
 ## Migrations
 
-Migrations are EF Core code-first migrations living in `src/StepTrail.Api/Migrations/`. The API project owns the schema. The Worker reads and writes but never migrates.
+Migrations are EF Core code-first migrations in `src/StepTrail.Api/Migrations/`. The API owns the schema; the Worker reads and writes but never migrates.
 
 | Migration | Change |
 |-----------|--------|
-| `20260410152221_InitialSchema` | All 8 tables, constraints, indexes |
-| `20260410190826_RemoveTenantFromWorkflowDefinition` | Workflow definitions made global (removed tenant_id) |
-| `20260410192716_AddRetryPolicyToWorkflowDefinitionStep` | Added `max_attempts` (default 3) and `retry_delay_seconds` (default 30) |
+| `20260410152221_InitialSchema` | All base tables, constraints, indexes |
+| `20260410190826_RemoveTenantFromWorkflowDefinition` | Workflow definitions made global |
+| `20260410192716_AddRetryPolicyToWorkflowDefinitionStep` | `max_attempts`, `retry_delay_seconds` |
+| `20260412125029_AddTimeoutAndLockExpiry` | `timeout_seconds` on steps; `lock_expires_at`, `started_at` on executions |
+| `20260412131217_AddRecurringWorkflowSchedules` | `recurring_workflow_schedules` table |
+| `20260412132732_AddStepConfig` | `config` (jsonb) on `workflow_definition_steps` |
+| `20260412133604_AddWorkflowSecrets` | `workflow_secrets` table |
 
-Migrations are applied automatically at API startup via `db.Database.MigrateAsync()`.
+Migrations are applied automatically at API startup.
 
 To add a new migration (run from repo root):
 
@@ -386,28 +412,44 @@ dotnet ef migrations add YourMigrationName \
 ```json
 {
   "ConnectionStrings": {
-    "DefaultConnection": "Host=localhost;Port=5432;Database=steptrail;Username=steptrail;Password=steptrail"
+    "StepTrailDb": "Host=localhost;Port=5432;Database=steptrail;Username=steptrail;Password=steptrail"
+  },
+  "UI": {
+    "ApiBaseUrl": "http://localhost:5000"
+  },
+  "Ops": {
+    "Username": "admin",
+    "Password": "admin"
   }
 }
 ```
+
+`Ops:Username` and `Ops:Password` should be overridden via environment variables in any non-local deployment (`Ops__Username`, `Ops__Password`).
 
 ### Worker (`src/StepTrail.Worker/appsettings.json`)
 
 ```json
 {
   "ConnectionStrings": {
-    "DefaultConnection": "Host=localhost;Port=5432;Database=steptrail;Username=steptrail;Password=steptrail"
+    "StepTrailDb": "Host=localhost;Port=5432;Database=steptrail;Username=steptrail;Password=steptrail"
   },
   "Worker": {
-    "PollIntervalSeconds": 5
+    "PollIntervalSeconds": 5,
+    "HeartbeatIntervalSeconds": 60,
+    "DefaultLockExpirySeconds": 300
+  },
+  "Alerts": {
+    "WebhookUrl": ""
   }
 }
 ```
+
+Set `Alerts:WebhookUrl` to a non-empty URL to enable webhook-based failure notifications.
 
 ---
 
 ## Scaling
 
-**Scale the Worker horizontally** — run multiple instances of `StepTrail.Worker` pointing at the same database. The `SELECT ... FOR UPDATE SKIP LOCKED` pattern ensures each step execution is claimed by exactly one worker. No additional coordination needed.
+**Scale the Worker horizontally** — run multiple instances pointing at the same database. `SELECT ... FOR UPDATE SKIP LOCKED` ensures each step execution and each recurring schedule is claimed by exactly one worker. No additional coordination needed.
 
-**Scale the API horizontally** — it is stateless (all state is in the database). Run multiple instances behind a load balancer. The idempotency handling and retry locking both rely on database constraints and row locks, so they are safe under concurrent API instances.
+**Scale the API horizontally** — it is stateless (all state is in the database). Run multiple instances behind a load balancer. Idempotency handling and retry locking both rely on database constraints and row locks, safe under concurrent instances.

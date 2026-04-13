@@ -22,15 +22,21 @@ tenants
   |      |      |
   |      |      +-- workflow_events (optional step link)
   |      |
-  |      +-- workflow_events (instance-level or step-level)
+  |      +-- workflow_events (instance-level)
   |
   +-- idempotency_records
+  |
+  +-- recurring_workflow_schedules (via tenant_id)
 
 workflow_definitions
   |
   +-- workflow_definition_steps
   |
   +-- workflow_instances
+  |
+  +-- recurring_workflow_schedules (via workflow_definition_id)
+
+workflow_secrets  (standalone — referenced by name from step configs)
 ```
 
 ## Core Tables
@@ -46,10 +52,11 @@ Used by:
 - users
 - workflow instances
 - idempotency records
+- recurring workflow schedules
 
 Note:
 
-- workflow definitions are not tenant-scoped in the current model
+- workflow definitions are not tenant-scoped
 
 ### `users`
 
@@ -98,6 +105,8 @@ Important fields:
 - `order`
 - `max_attempts`
 - `retry_delay_seconds`
+- `timeout_seconds` — nullable; when set, the worker cancels the handler after this many seconds
+- `config` — nullable jsonb; handler-specific configuration (e.g. `HttpActivityConfig`)
 
 Important rules:
 
@@ -144,19 +153,21 @@ Important fields:
 - `status`
 - `attempt`
 - `input`
-- `output`
+- `output` — populated on success; also populated on `HttpActivityHandler` failure with the HTTP response (status + body)
 - `error`
-- `scheduled_at`
+- `scheduled_at` — gating field: worker only claims rows where `scheduled_at <= now`
 - `locked_at`
 - `locked_by`
+- `lock_expires_at` — renewed by `StepLeaseRenewer` while handler is running; used by orphan detection
 - `started_at`
 - `completed_at`
 - `created_at`
 - `updated_at`
 
-Important design point:
+Important design points:
 
 - retries and replay append new rows instead of erasing prior rows
+- `lock_expires_at` is the heartbeat anchor for orphan detection — if it lapses, the execution may be recovered
 
 This table is the heart of the runtime engine.
 
@@ -178,7 +189,7 @@ Important rule:
 
 Interpretation:
 
-- this is a lookup table from caller request identity to created workflow instance
+- a lookup table from caller request identity to the created workflow instance
 
 ### `workflow_events`
 
@@ -199,37 +210,85 @@ Interpretation:
 - instance-level events have no step execution link
 - step-level events point to a specific execution row
 
+### `recurring_workflow_schedules`
+
+Purpose:
+
+- records a repeating trigger for a workflow definition
+
+Important fields:
+
+- `workflow_definition_id` — unique; one schedule per definition
+- `tenant_id`
+- `interval_seconds`
+- `is_enabled` — disabling pauses dispatch without deleting the schedule
+- `input` — optional; forwarded to each new instance as workflow input
+- `last_run_at`
+- `next_run_at` — gating field for dispatcher; advanced by `interval_seconds` after each fire
+
+Index:
+
+- `(is_enabled, next_run_at)` — used by `RecurringWorkflowDispatcher` on every loop
+
+Interpretation:
+
+- the dispatcher fires a new workflow instance whenever `next_run_at <= now` and `is_enabled = true`
+
+### `workflow_secrets`
+
+Purpose:
+
+- stores named secret values for use in step configurations
+
+Important fields:
+
+- `name` — unique; used as the key in `{{secrets.name}}` placeholders
+- `value` — the raw secret value, never returned by any API endpoint
+- `description`
+- `created_at`
+- `updated_at`
+
+Interpretation:
+
+- `SecretResolver` (worker) loads secrets by name and substitutes them into step config strings at execution time
+- the ops API (`GET /secrets`) returns names and descriptions only, never values
+
 ## Status Enums
 
 ### Workflow instance statuses
 
-- `Pending`
-- `Running`
-- `Completed`
-- `Failed`
-- `Cancelled`
+- `Pending` — created, not yet claimed by the worker
+- `Running` — at least one step has been started
+- `Completed` — all steps completed successfully
+- `Failed` — a step exhausted all retry attempts
+- `Cancelled` — manually cancelled before completion
+- `Archived` — manually archived after completion or failure; hidden from default list view
 
 ### Workflow step execution statuses
 
-- `Pending`
-- `Running`
-- `Completed`
-- `Failed`
-- `Cancelled`
+- `Pending` — waiting to be claimed
+- `Running` — currently claimed and executing
+- `Completed` — handler succeeded
+- `Failed` — handler failed (including timeouts and orphans)
+- `Cancelled` — step was cancelled as part of a workflow cancel operation
 
 ## Event Types
 
-The current event catalog is:
-
-- `WorkflowStarted`
-- `StepStarted`
-- `StepCompleted`
-- `StepFailed`
-- `StepRetryScheduled`
-- `WorkflowCompleted`
-- `WorkflowFailed`
-- `WorkflowRetried`
-- `WorkflowReplayed`
+| Event | Level | Trigger |
+|-------|-------|---------|
+| `WorkflowStarted` | instance | new instance created |
+| `StepStarted` | step | handler began executing |
+| `StepCompleted` | step | handler succeeded |
+| `StepFailed` | step | handler threw an exception |
+| `StepTimedOut` | step | handler exceeded `TimeoutSeconds` |
+| `StepOrphaned` | step | lease expired without completion |
+| `StepRetryScheduled` | step | new attempt queued after failure |
+| `WorkflowCompleted` | instance | final step completed |
+| `WorkflowFailed` | instance | step exhausted all attempts |
+| `WorkflowRetried` | instance | manual retry from last failed step |
+| `WorkflowReplayed` | instance | manual replay from step 1 |
+| `WorkflowCancelled` | instance | manually cancelled |
+| `WorkflowArchived` | instance | manually archived |
 
 ## Data Semantics
 
@@ -239,6 +298,7 @@ Static metadata:
 
 - `workflow_definitions`
 - `workflow_definition_steps`
+- `workflow_secrets`
 
 Runtime state:
 
@@ -247,9 +307,13 @@ Runtime state:
 - `idempotency_records`
 - `workflow_events`
 
+Scheduling metadata (static config, runtime cursor):
+
+- `recurring_workflow_schedules`
+
 ### Append-oriented execution history
 
-A key design choice in this schema is that execution history is append-oriented:
+A key design choice is that execution history is append-oriented:
 
 - new attempts produce new step execution rows
 - replay produces new step execution rows
@@ -264,24 +328,24 @@ Tenant scope applies to:
 - users
 - workflow instances
 - idempotency records
+- recurring workflow schedules
 
-Workflow definitions are global in the current implementation.
+Workflow definitions and secrets are global in the current implementation.
 
 That means:
 
 - all tenants use the same registered workflow definitions
-- tenant isolation is on execution, not on definition metadata
+- secrets are not tenant-scoped
+- tenant isolation is on execution, not on definition or secret metadata
 
 ## What To Look At When Debugging
 
 If a workflow behaves unexpectedly, the most useful debugging sequence is:
 
-1. inspect `workflow_instances`
-2. inspect all related `workflow_step_executions` ordered by `created_at`
-3. inspect all related `workflow_events` ordered by `created_at`
-4. inspect the corresponding `workflow_definition_steps`
+1. inspect `workflow_instances` — current status and input
+2. inspect all related `workflow_step_executions` ordered by `created_at` — attempt history, error, output
+3. inspect all related `workflow_events` ordered by `created_at` — full timeline
+4. inspect the corresponding `workflow_definition_steps` — intended retry policy, timeout, and config
+5. for HTTP activity failures: the `output` column on the failed execution contains the HTTP response body
 
-This gives both:
-
-- the intended static plan
-- the actual runtime history
+The ops console instance detail page surfaces steps 1–3 directly in the browser.

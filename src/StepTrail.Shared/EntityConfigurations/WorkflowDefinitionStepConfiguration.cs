@@ -18,6 +18,8 @@ public class WorkflowDefinitionStepConfiguration : IEntityTypeConfiguration<Work
         builder.Property(s => s.Order).HasColumnName("order").IsRequired();
         builder.Property(s => s.MaxAttempts).HasColumnName("max_attempts").IsRequired();
         builder.Property(s => s.RetryDelaySeconds).HasColumnName("retry_delay_seconds").IsRequired();
+        builder.Property(s => s.TimeoutSeconds).HasColumnName("timeout_seconds");
+        builder.Property(s => s.Config).HasColumnName("config").HasColumnType("jsonb");
         builder.Property(s => s.CreatedAt).HasColumnName("created_at").IsRequired();
 
         builder.HasIndex(s => new { s.WorkflowDefinitionId, s.StepKey }).IsUnique();
