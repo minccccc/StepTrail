@@ -10,6 +10,8 @@ using StepTrail.Api.Services;
 using StepTrail.Api.UI;
 using StepTrail.Api.Workflows;
 using StepTrail.Shared;
+using StepTrail.Shared.Definitions;
+using StepTrail.Shared.Runtime.AvailableFields;
 using StepTrail.Shared.Workflows;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -118,13 +120,28 @@ app.MapPost("/webhooks/{workflowKey}", async (
         ? tid
         : TenantSeedService.DefaultTenantId;
 
-    // Read body as JSON if the caller sent one; null otherwise.
+    // Read the raw body first so it can always be captured in trigger_data — even when
+    // JSON parsing fails. ReadFromJsonAsync consumes the stream; reading the raw string
+    // preserves the payload for debugging malformed or non-JSON requests.
+    string? rawBody = null;
     object? input = null;
     if (httpRequest.HasJsonContentType())
     {
-        try { input = await httpRequest.ReadFromJsonAsync<JsonElement>(ct); }
+        rawBody = await new StreamReader(httpRequest.Body).ReadToEndAsync(ct);
+        try { input = JsonSerializer.Deserialize<JsonElement>(rawBody); }
         catch (JsonException) { /* malformed body — proceed with no input */ }
     }
+
+    // Capture raw trigger context for debugging and placeholder resolution.
+    // Headers that carry no diagnostic value for webhooks are excluded.
+    // body: parsed JsonElement when valid JSON; raw string when malformed; null when no body.
+    var triggerData = JsonSerializer.Serialize(new
+    {
+        body    = input ?? (object?)rawBody,
+        headers = CaptureWebhookHeaders(httpRequest),
+        query   = httpRequest.Query
+            .ToDictionary(q => q.Key, q => q.Value.ToString())
+    });
 
     var request = new StartWorkflowRequest
     {
@@ -132,7 +149,8 @@ app.MapPost("/webhooks/{workflowKey}", async (
         TenantId       = tenantId,
         ExternalKey    = externalKey,
         IdempotencyKey = idempotencyKey,
-        Input          = input
+        Input          = input,
+        TriggerData    = triggerData
     };
 
     try
@@ -162,6 +180,52 @@ app.MapPost("/webhooks/{workflowKey}", async (
 // WorkflowApiClient; direct callers must present a valid session cookie.
 
 var ops = app.MapGroup("").RequireAuthorization();
+
+// ── Workflow definition endpoints ─────────────────────────────────────────────
+
+/// <summary>
+/// Returns all placeholder paths available when configuring a specific step.
+///
+/// Results include:
+///   - an input note ({{input.*}} guidance — no schema enumeration)
+///   - per-step output fields for every step that precedes <paramref name="stepKey"/> in execution order
+///   - all registered secrets as {{secrets.*}} references
+///
+/// Query parameter <c>version</c> is optional; omit it to query the active version.
+/// </summary>
+ops.MapGet("/workflow-definitions/{key}/steps/{stepKey}/available-fields", async (
+    string key,
+    string stepKey,
+    int? version,
+    IWorkflowDefinitionRepository repository,
+    StepTrailDbContext db,
+    CancellationToken ct) =>
+{
+    var definition = version.HasValue
+        ? await repository.GetByKeyAndVersionAsync(key, version.Value, ct)
+        : await repository.GetActiveByKeyAsync(key, ct);
+
+    if (definition is null)
+    {
+        var versionSuffix = version.HasValue ? $" (version {version.Value})" : " (active)";
+        return Results.NotFound(new { error = $"No workflow definition found for key '{key}'{versionSuffix}." });
+    }
+
+    var secretNames = await db.WorkflowSecrets
+        .OrderBy(s => s.Name)
+        .Select(s => s.Name)
+        .ToListAsync(ct);
+
+    try
+    {
+        var response = AvailableFieldsService.GetAvailableFields(definition, stepKey, secretNames);
+        return Results.Ok(response);
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+});
 
 ops.MapGet("/workflows", (IWorkflowRegistry registry) =>
 {
@@ -412,3 +476,21 @@ ops.MapDelete("/secrets/{name}", async (
 });
 
 app.Run();
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+static Dictionary<string, string> CaptureWebhookHeaders(HttpRequest request)
+{
+    // These headers carry no diagnostic value for webhook trigger debugging.
+    var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "Connection", "Content-Length", "Host", "Transfer-Encoding",
+        "Accept-Encoding", "Accept-Language", "Upgrade-Insecure-Requests"
+    };
+
+    return request.Headers
+        .Where(h => !excluded.Contains(h.Key))
+        .ToDictionary(
+            h => h.Key.ToLowerInvariant(),
+            h => h.Value.ToString());
+}

@@ -22,7 +22,16 @@ public class WorkflowInstance
     public WorkflowInstanceStatus Status { get; set; }
 
     /// <summary>
-    /// JSON payload provided when the workflow was started.
+    /// Raw inbound trigger payload captured at start time.
+    /// For webhooks: { "body": {...}, "headers": {...}, "query": {...} }.
+    /// Null for programmatic API starts where no external trigger context exists.
+    /// Step executors must not mutate this value.
+    /// </summary>
+    public string? TriggerData { get; set; }
+
+    /// <summary>
+    /// Normalized workflow input derived from trigger data.
+    /// This is what downstream steps receive and what {{input.*}} placeholders resolve against.
     /// </summary>
     public string? Input { get; set; }
 

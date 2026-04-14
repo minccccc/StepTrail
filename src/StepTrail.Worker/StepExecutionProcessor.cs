@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using StepTrail.Shared;
 using StepTrail.Shared.Definitions;
 using StepTrail.Shared.Entities;
+using StepTrail.Shared.Runtime;
 using StepTrail.Shared.Workflows;
 using StepTrail.Worker.Handlers;
 
@@ -70,13 +71,18 @@ public sealed class StepExecutionProcessor
                 ?? throw new InvalidOperationException(
                     $"No handler registered for step type '{runtimeDefinition.HandlerKey}'.");
 
+            var (workflowState, secretValues) = await BuildExecutionContextAsync(
+                execution.WorkflowInstanceId, ct);
+
             var context = new StepContext
             {
                 WorkflowInstanceId = execution.WorkflowInstanceId,
                 StepExecutionId = execution.Id,
                 StepKey = execution.StepKey,
                 Input = execution.Input,
-                Config = runtimeDefinition.Config
+                Config = runtimeDefinition.Config,
+                State = workflowState,
+                Secrets = secretValues
             };
 
             CancellationTokenSource? timeoutCts = null;
@@ -320,6 +326,33 @@ public sealed class StepExecutionProcessor
             WorkflowKey: instance.WorkflowDefinitionKey ?? execution.WorkflowInstanceId.ToString(),
             UseMaterializedSteps: true,
             LegacyWorkflowDefinitionId: null);
+    }
+
+    /// <summary>
+    /// Assembles the WorkflowState and pre-loads all secrets needed for placeholder resolution.
+    /// Called once per step execution before invoking the step handler.
+    /// </summary>
+    private async Task<(WorkflowState state, IReadOnlyDictionary<string, string> secrets)> BuildExecutionContextAsync(
+        Guid instanceId,
+        CancellationToken ct)
+    {
+        var instance = await _db.WorkflowInstances
+            .AsNoTracking()
+            .FirstOrDefaultAsync(i => i.Id == instanceId, ct)
+            ?? throw new InvalidOperationException($"WorkflowInstance {instanceId} not found.");
+
+        var executions = await _db.WorkflowStepExecutions
+            .AsNoTracking()
+            .Where(e => e.WorkflowInstanceId == instanceId)
+            .ToListAsync(ct);
+
+        var state = WorkflowStateAssembler.Assemble(instance, executions);
+
+        var secrets = await _db.WorkflowSecrets
+            .AsNoTracking()
+            .ToDictionaryAsync(s => s.Name, s => s.Value, ct);
+
+        return (state, secrets);
     }
 
     private async Task<string> ResolveLegacyWorkflowKeyAsync(Guid workflowDefinitionId, CancellationToken ct)

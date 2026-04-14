@@ -139,6 +139,7 @@ public sealed class WorkflowInstanceService
             ExternalKey = request.ExternalKey,
             IdempotencyKey = request.IdempotencyKey,
             Status = WorkflowInstanceStatus.Pending,
+            TriggerData = request.TriggerData,
             Input = inputJson,
             CreatedAt = now,
             UpdatedAt = now
@@ -243,6 +244,7 @@ public sealed class WorkflowInstanceService
             ExternalKey = request.ExternalKey,
             IdempotencyKey = request.IdempotencyKey,
             Status = WorkflowInstanceStatus.Pending,
+            TriggerData = request.TriggerData,
             Input = inputJson,
             CreatedAt = now,
             UpdatedAt = now

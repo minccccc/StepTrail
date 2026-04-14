@@ -28,7 +28,6 @@ builder.Services.AddScoped<StepFailureService>();
 builder.Services.AddScoped<StepExecutionProcessor>();
 builder.Services.AddScoped<StuckExecutionDetector>();
 builder.Services.AddScoped<RecurringWorkflowDispatcher>();
-builder.Services.AddScoped<SecretResolver>();
 
 builder.Services.AddKeyedScoped<IStepHandler, SendWelcomeEmailHandler>(nameof(SendWelcomeEmailHandler));
 builder.Services.AddKeyedScoped<IStepHandler, ProvisionAccountHandler>(nameof(ProvisionAccountHandler));

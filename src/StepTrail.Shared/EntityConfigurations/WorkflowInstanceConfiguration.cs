@@ -20,6 +20,7 @@ public class WorkflowInstanceConfiguration : IEntityTypeConfiguration<WorkflowIn
         builder.Property(i => i.ExternalKey).HasColumnName("external_key").HasMaxLength(500);
         builder.Property(i => i.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(500);
         builder.Property(i => i.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(50).IsRequired();
+        builder.Property(i => i.TriggerData).HasColumnName("trigger_data").HasColumnType("jsonb");
         builder.Property(i => i.Input).HasColumnName("input").HasColumnType("jsonb");
         builder.Property(i => i.CreatedAt).HasColumnName("created_at").IsRequired();
         builder.Property(i => i.UpdatedAt).HasColumnName("updated_at").IsRequired();

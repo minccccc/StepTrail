@@ -34,4 +34,11 @@ public sealed class StartWorkflowRequest
     /// Arbitrary JSON payload passed as input to the workflow.
     /// </summary>
     public object? Input { get; set; }
+
+    /// <summary>
+    /// Raw trigger context, already serialized as JSON.
+    /// Set by trigger-specific paths (e.g. the webhook handler) before calling the service.
+    /// Null for programmatic API starts where no external trigger context exists.
+    /// </summary>
+    public string? TriggerData { get; set; }
 }
