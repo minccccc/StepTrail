@@ -201,6 +201,7 @@ else if (inst is not null)
                             {
                                 var rowClass = step.Status switch
                                 {
+                                    "NotStarted" => "table-light",
                                     "Completed" => "table-success",
                                     "Failed"    => "table-danger",
                                     "Running"   => "table-primary",
@@ -253,6 +254,7 @@ else if (inst is not null)
 
     static string StepStatusBadge(string status) => status switch
     {
+        "NotStarted" => "<span class=\"badge bg-light text-dark border\">Not Started</span>",
         "Pending"   => "<span class=\"badge bg-secondary\">Pending</span>",
         "Running"   => "<span class=\"badge bg-primary\">Running</span>",
         "Completed" => "<span class=\"badge bg-success\">Completed</span>",

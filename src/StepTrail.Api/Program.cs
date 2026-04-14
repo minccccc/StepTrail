@@ -150,6 +150,10 @@ app.MapPost("/webhooks/{workflowKey}", async (
     {
         return Results.NotFound(new { error = ex.Message });
     }
+    catch (WorkflowDefinitionNotActiveException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
 });
 
 // ── Ops API — requires authentication ────────────────────────────────────────
@@ -199,6 +203,10 @@ ops.MapPost("/workflow-instances", async (
     catch (TenantNotFoundException ex)
     {
         return Results.NotFound(new { error = ex.Message });
+    }
+    catch (WorkflowDefinitionNotActiveException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
     }
 });
 

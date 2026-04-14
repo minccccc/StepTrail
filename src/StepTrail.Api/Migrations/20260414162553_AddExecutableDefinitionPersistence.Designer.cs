@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using StepTrail.Shared;
@@ -11,9 +12,11 @@ using StepTrail.Shared;
 namespace StepTrail.Api.Migrations
 {
     [DbContext(typeof(StepTrailDbContext))]
-    partial class StepTrailDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260414162553_AddExecutableDefinitionPersistence")]
+    partial class AddExecutableDefinitionPersistence
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -140,11 +143,6 @@ namespace StepTrail.Api.Migrations
                         .HasColumnName("version");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("Key")
-                        .IsUnique()
-                        .HasDatabaseName("ux_executable_workflow_definitions_active_key")
-                        .HasFilter("\"status\" = 'Active'");
 
                     b.HasIndex("Key", "Status");
 
@@ -452,10 +450,6 @@ namespace StepTrail.Api.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
-                    b.Property<Guid?>("ExecutableWorkflowDefinitionId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("executable_workflow_definition_id");
-
                     b.Property<string>("ExternalKey")
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)")
@@ -484,18 +478,9 @@ namespace StepTrail.Api.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
 
-                    b.Property<Guid?>("WorkflowDefinitionId")
+                    b.Property<Guid>("WorkflowDefinitionId")
                         .HasColumnType("uuid")
                         .HasColumnName("workflow_definition_id");
-
-                    b.Property<string>("WorkflowDefinitionKey")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)")
-                        .HasColumnName("workflow_definition_key");
-
-                    b.Property<int?>("WorkflowDefinitionVersion")
-                        .HasColumnType("integer")
-                        .HasColumnName("workflow_definition_version");
 
                     b.HasKey("Id");
 
@@ -506,8 +491,6 @@ namespace StepTrail.Api.Migrations
                     b.HasIndex("TenantId", "IdempotencyKey");
 
                     b.HasIndex("TenantId", "Status");
-
-                    b.HasIndex("WorkflowDefinitionKey", "WorkflowDefinitionVersion");
 
                     b.ToTable("workflow_instances", (string)null);
                 });
@@ -574,10 +557,6 @@ namespace StepTrail.Api.Migrations
                         .HasColumnType("text")
                         .HasColumnName("error");
 
-                    b.Property<Guid?>("ExecutableStepDefinitionId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("executable_step_definition_id");
-
                     b.Property<string>("Input")
                         .HasColumnType("jsonb")
                         .HasColumnName("input");
@@ -599,11 +578,6 @@ namespace StepTrail.Api.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("output");
 
-                    b.Property<string>("RetryPolicyOverrideKey")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)")
-                        .HasColumnName("retry_policy_override_key");
-
                     b.Property<DateTimeOffset>("ScheduledAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("scheduled_at");
@@ -618,30 +592,17 @@ namespace StepTrail.Api.Migrations
                         .HasColumnType("character varying(50)")
                         .HasColumnName("status");
 
-                    b.Property<string>("StepConfiguration")
-                        .HasColumnType("jsonb")
-                        .HasColumnName("step_configuration");
-
                     b.Property<string>("StepKey")
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)")
                         .HasColumnName("step_key");
 
-                    b.Property<int?>("StepOrder")
-                        .HasColumnType("integer")
-                        .HasColumnName("step_order");
-
-                    b.Property<string>("StepType")
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)")
-                        .HasColumnName("step_type");
-
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
 
-                    b.Property<Guid?>("WorkflowDefinitionStepId")
+                    b.Property<Guid>("WorkflowDefinitionStepId")
                         .HasColumnType("uuid")
                         .HasColumnName("workflow_definition_step_id");
 
@@ -658,8 +619,6 @@ namespace StepTrail.Api.Migrations
                     b.HasIndex("Status", "LockExpiresAt");
 
                     b.HasIndex("Status", "ScheduledAt");
-
-                    b.HasIndex("WorkflowInstanceId", "StepOrder", "Status");
 
                     b.ToTable("workflow_step_executions", (string)null);
                 });
@@ -773,7 +732,9 @@ namespace StepTrail.Api.Migrations
 
                     b.HasOne("StepTrail.Shared.Entities.WorkflowDefinition", "WorkflowDefinition")
                         .WithMany("Instances")
-                        .HasForeignKey("WorkflowDefinitionId");
+                        .HasForeignKey("WorkflowDefinitionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
                     b.Navigation("Tenant");
 
@@ -784,7 +745,9 @@ namespace StepTrail.Api.Migrations
                 {
                     b.HasOne("StepTrail.Shared.Entities.WorkflowDefinitionStep", "WorkflowDefinitionStep")
                         .WithMany("Executions")
-                        .HasForeignKey("WorkflowDefinitionStepId");
+                        .HasForeignKey("WorkflowDefinitionStepId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
                     b.HasOne("StepTrail.Shared.Entities.WorkflowInstance", "WorkflowInstance")
                         .WithMany("StepExecutions")

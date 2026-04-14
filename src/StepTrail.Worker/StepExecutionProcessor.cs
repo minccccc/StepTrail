@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using StepTrail.Shared;
+using StepTrail.Shared.Definitions;
 using StepTrail.Shared.Entities;
 using StepTrail.Shared.Workflows;
 using StepTrail.Worker.Handlers;
@@ -16,6 +18,8 @@ namespace StepTrail.Worker;
 /// </summary>
 public sealed class StepExecutionProcessor
 {
+    private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web);
+
     private readonly StepTrailDbContext _db;
     private readonly IServiceProvider _serviceProvider;
     private readonly StepFailureService _failureService;
@@ -43,12 +47,7 @@ public sealed class StepExecutionProcessor
     public async Task ProcessAsync(WorkflowStepExecution execution, CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;
-
-        // Load the step definition for StepType, Order, and TimeoutSeconds
-        var stepDef = await _db.WorkflowDefinitionSteps
-            .FindAsync([execution.WorkflowDefinitionStepId], ct)
-            ?? throw new InvalidOperationException(
-                $"WorkflowDefinitionStep {execution.WorkflowDefinitionStepId} not found.");
+        var runtimeDefinition = await ResolveRuntimeDefinitionAsync(execution, ct);
 
         // Record that execution has begun
         _db.WorkflowEvents.Add(new WorkflowEvent
@@ -61,16 +60,15 @@ public sealed class StepExecutionProcessor
         });
         await _db.SaveChangesAsync(ct);
 
-        // Resolve handler and execute, applying per-step timeout if configured
         string? output = null;
         string? error = null;
         bool timedOut = false;
 
         try
         {
-            var handler = _serviceProvider.GetKeyedService<IStepHandler>(stepDef.StepType)
+            var handler = _serviceProvider.GetKeyedService<IStepHandler>(runtimeDefinition.HandlerKey)
                 ?? throw new InvalidOperationException(
-                    $"No handler registered for step type '{stepDef.StepType}'.");
+                    $"No handler registered for step type '{runtimeDefinition.HandlerKey}'.");
 
             var context = new StepContext
             {
@@ -78,23 +76,19 @@ public sealed class StepExecutionProcessor
                 StepExecutionId = execution.Id,
                 StepKey = execution.StepKey,
                 Input = execution.Input,
-                Config = stepDef.Config
+                Config = runtimeDefinition.Config
             };
 
-            // Build an execution token: linked to the worker shutdown token,
-            // optionally cancelled after TimeoutSeconds.
             CancellationTokenSource? timeoutCts = null;
             var executionToken = ct;
 
-            if (stepDef.TimeoutSeconds.HasValue)
+            if (runtimeDefinition.TimeoutSeconds.HasValue)
             {
                 timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(stepDef.TimeoutSeconds.Value));
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(runtimeDefinition.TimeoutSeconds.Value));
                 executionToken = timeoutCts.Token;
             }
 
-            // Keep the lock alive while the handler runs so the StuckExecutionDetector
-            // does not reclaim this step. Disposed (cancelled) as soon as the handler returns.
             var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
             await using var lease = new StepLeaseRenewer(
                 execution.Id, scopeFactory, _heartbeatInterval, _lockWindow, _logger, ct);
@@ -111,23 +105,19 @@ public sealed class StepExecutionProcessor
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Worker is shutting down — propagate so the loop can exit cleanly.
             throw;
         }
-        catch (OperationCanceledException) when (stepDef.TimeoutSeconds.HasValue)
+        catch (OperationCanceledException) when (runtimeDefinition.TimeoutSeconds.HasValue)
         {
-            // Timeout CTS fired; the handler exceeded its configured limit.
             timedOut = true;
-            error = $"Step timed out after {stepDef.TimeoutSeconds.Value}s.";
+            error = $"Step timed out after {runtimeDefinition.TimeoutSeconds.Value}s.";
             _logger.LogWarning(
                 "Step {StepKey} (execution {ExecutionId}) timed out after {Timeout}s",
-                execution.StepKey, execution.Id, stepDef.TimeoutSeconds.Value);
+                execution.StepKey, execution.Id, runtimeDefinition.TimeoutSeconds.Value);
         }
         catch (HttpActivityException ex)
         {
-            // Non-2xx HTTP response: preserve the response output (status code + body)
-            // so it is persisted on the failed execution and visible in the timeline.
-            error  = ex.Message;
+            error = ex.Message;
             output = ex.ResponseOutput;
             _logger.LogWarning(
                 "Step {StepKey} (execution {ExecutionId}) received non-2xx HTTP response",
@@ -144,18 +134,23 @@ public sealed class StepExecutionProcessor
         now = DateTimeOffset.UtcNow;
 
         if (error is null)
-            await PersistSuccessAsync(execution, stepDef, output, now, ct);
+            await PersistSuccessAsync(execution, runtimeDefinition, output, now, ct);
         else
             await _failureService.HandleAsync(
-                execution, stepDef, error,
+                execution,
+                error,
                 timedOut ? WorkflowEventTypes.StepTimedOut : WorkflowEventTypes.StepFailed,
-                now, ct,
-                output);
+                now,
+                ct,
+                output,
+                runtimeDefinition.MaxAttempts,
+                runtimeDefinition.RetryDelaySeconds,
+                runtimeDefinition.WorkflowKey);
     }
 
     private async Task PersistSuccessAsync(
         WorkflowStepExecution execution,
-        WorkflowDefinitionStep stepDef,
+        ResolvedStepExecutionDefinition runtimeDefinition,
         string? output,
         DateTimeOffset now,
         CancellationToken ct)
@@ -174,10 +169,38 @@ public sealed class StepExecutionProcessor
             CreatedAt = now
         });
 
-        // Look for the next step in the workflow
+        if (runtimeDefinition.UseMaterializedSteps)
+        {
+            var nextStepExecution = await _db.WorkflowStepExecutions
+                .Where(stepExecution => stepExecution.WorkflowInstanceId == execution.WorkflowInstanceId
+                                     && stepExecution.StepOrder == runtimeDefinition.StepOrder + 1
+                                     && stepExecution.Status == WorkflowStepExecutionStatus.NotStarted)
+                .OrderBy(stepExecution => stepExecution.CreatedAt)
+                .FirstOrDefaultAsync(ct);
+
+            if (nextStepExecution is not null)
+            {
+                nextStepExecution.Status = WorkflowStepExecutionStatus.Pending;
+                nextStepExecution.Input = execution.Output;
+                nextStepExecution.ScheduledAt = now;
+                nextStepExecution.UpdatedAt = now;
+
+                _logger.LogInformation(
+                    "Step {StepKey} completed — next materialized step {NextStepKey} scheduled",
+                    execution.StepKey, nextStepExecution.StepKey);
+            }
+            else
+            {
+                await CompleteWorkflowInstanceAsync(execution.WorkflowInstanceId, execution.StepKey, now, ct);
+            }
+
+            await _db.SaveChangesAsync(ct);
+            return;
+        }
+
         var nextStepDef = await _db.WorkflowDefinitionSteps
-            .Where(s => s.WorkflowDefinitionId == stepDef.WorkflowDefinitionId
-                     && s.Order == stepDef.Order + 1)
+            .Where(s => s.WorkflowDefinitionId == runtimeDefinition.LegacyWorkflowDefinitionId
+                     && s.Order == runtimeDefinition.StepOrder + 1)
             .FirstOrDefaultAsync(ct);
 
         if (nextStepDef is not null)
@@ -188,9 +211,12 @@ public sealed class StepExecutionProcessor
                 WorkflowInstanceId = execution.WorkflowInstanceId,
                 WorkflowDefinitionStepId = nextStepDef.Id,
                 StepKey = nextStepDef.StepKey,
+                StepOrder = nextStepDef.Order,
+                StepType = nextStepDef.StepType,
+                StepConfiguration = nextStepDef.Config,
                 Status = WorkflowStepExecutionStatus.Pending,
                 Attempt = 1,
-                Input = execution.Output,   // previous step's output becomes next step's input
+                Input = execution.Output,
                 ScheduledAt = now,
                 CreatedAt = now,
                 UpdatedAt = now
@@ -202,30 +228,141 @@ public sealed class StepExecutionProcessor
         }
         else
         {
-            // Last step — complete the workflow instance
-            var instance = await _db.WorkflowInstances
-                .FindAsync([execution.WorkflowInstanceId], ct)
-                ?? throw new InvalidOperationException(
-                    $"WorkflowInstance {execution.WorkflowInstanceId} not found.");
-
-            instance.Status = WorkflowInstanceStatus.Completed;
-            instance.CompletedAt = now;
-            instance.UpdatedAt = now;
-
-            _db.WorkflowEvents.Add(new WorkflowEvent
-            {
-                Id = Guid.NewGuid(),
-                WorkflowInstanceId = execution.WorkflowInstanceId,
-                StepExecutionId = null,
-                EventType = WorkflowEventTypes.WorkflowCompleted,
-                CreatedAt = now
-            });
-
-            _logger.LogInformation(
-                "Step {StepKey} completed — workflow instance {InstanceId} is now Completed",
-                execution.StepKey, execution.WorkflowInstanceId);
+            await CompleteWorkflowInstanceAsync(execution.WorkflowInstanceId, execution.StepKey, now, ct);
         }
 
         await _db.SaveChangesAsync(ct);
+    }
+
+    private async Task CompleteWorkflowInstanceAsync(
+        Guid workflowInstanceId,
+        string stepKey,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var instance = await _db.WorkflowInstances
+            .FindAsync([workflowInstanceId], ct)
+            ?? throw new InvalidOperationException(
+                $"WorkflowInstance {workflowInstanceId} not found.");
+
+        instance.Status = WorkflowInstanceStatus.Completed;
+        instance.CompletedAt = now;
+        instance.UpdatedAt = now;
+
+        _db.WorkflowEvents.Add(new WorkflowEvent
+        {
+            Id = Guid.NewGuid(),
+            WorkflowInstanceId = workflowInstanceId,
+            StepExecutionId = null,
+            EventType = WorkflowEventTypes.WorkflowCompleted,
+            CreatedAt = now
+        });
+
+        _logger.LogInformation(
+            "Step {StepKey} completed — workflow instance {InstanceId} is now Completed",
+            stepKey, workflowInstanceId);
+    }
+
+    private async Task<ResolvedStepExecutionDefinition> ResolveRuntimeDefinitionAsync(
+        WorkflowStepExecution execution,
+        CancellationToken ct)
+    {
+        var instance = await _db.WorkflowInstances
+            .AsNoTracking()
+            .FirstOrDefaultAsync(i => i.Id == execution.WorkflowInstanceId, ct)
+            ?? throw new InvalidOperationException(
+                $"WorkflowInstance {execution.WorkflowInstanceId} not found.");
+
+        if (execution.WorkflowDefinitionStepId.HasValue)
+        {
+            var stepDef = await _db.WorkflowDefinitionSteps
+                .FindAsync([execution.WorkflowDefinitionStepId.Value], ct)
+                ?? throw new InvalidOperationException(
+                    $"WorkflowDefinitionStep {execution.WorkflowDefinitionStepId.Value} not found.");
+
+            return new ResolvedStepExecutionDefinition(
+                stepDef.StepType,
+                stepDef.Config,
+                stepDef.Order,
+                MaxAttempts: stepDef.MaxAttempts,
+                RetryDelaySeconds: stepDef.RetryDelaySeconds,
+                TimeoutSeconds: stepDef.TimeoutSeconds,
+                WorkflowKey: instance.WorkflowDefinitionKey ?? await ResolveLegacyWorkflowKeyAsync(stepDef.WorkflowDefinitionId, ct),
+                UseMaterializedSteps: false,
+                LegacyWorkflowDefinitionId: stepDef.WorkflowDefinitionId);
+        }
+
+        if (execution.StepOrder is null || string.IsNullOrWhiteSpace(execution.StepType))
+            throw new InvalidOperationException(
+                $"Executable step execution {execution.Id} is missing snapshot metadata.");
+
+        if (!Enum.TryParse<StepType>(execution.StepType, ignoreCase: true, out var stepType))
+            throw new InvalidOperationException(
+                $"Executable step execution {execution.Id} has unknown step type '{execution.StepType}'.");
+
+        var (handlerKey, config) = stepType switch
+        {
+            StepType.HttpRequest => (nameof(HttpActivityHandler), execution.StepConfiguration),
+            StepType.SendWebhook => (nameof(HttpActivityHandler), ConvertSendWebhookToHttpActivityConfig(execution.StepConfiguration)),
+            StepType.Transform => throw new InvalidOperationException("No executor is registered yet for executable step type 'Transform'."),
+            StepType.Conditional => throw new InvalidOperationException("No executor is registered yet for executable step type 'Conditional'."),
+            StepType.Delay => throw new InvalidOperationException("No executor is registered yet for executable step type 'Delay'."),
+            _ => throw new InvalidOperationException($"Unsupported executable step type '{stepType}'.")
+        };
+
+        return new ResolvedStepExecutionDefinition(
+            handlerKey,
+            config,
+            execution.StepOrder.Value,
+            MaxAttempts: 1,
+            RetryDelaySeconds: 0,
+            TimeoutSeconds: null,
+            WorkflowKey: instance.WorkflowDefinitionKey ?? execution.WorkflowInstanceId.ToString(),
+            UseMaterializedSteps: true,
+            LegacyWorkflowDefinitionId: null);
+    }
+
+    private async Task<string> ResolveLegacyWorkflowKeyAsync(Guid workflowDefinitionId, CancellationToken ct)
+    {
+        var definition = await _db.WorkflowDefinitions.FindAsync([workflowDefinitionId], ct);
+        return definition?.Key ?? workflowDefinitionId.ToString();
+    }
+
+    private static string? ConvertSendWebhookToHttpActivityConfig(string? stepConfiguration)
+    {
+        if (string.IsNullOrWhiteSpace(stepConfiguration))
+            return stepConfiguration;
+
+        var configuration = JsonSerializer.Deserialize<SendWebhookStepConfigurationSnapshot>(stepConfiguration, JsonSerializerOptions)
+            ?? throw new InvalidOperationException("Failed to deserialize send webhook step configuration.");
+
+        var httpActivityConfig = new
+        {
+            Url = configuration.WebhookUrl,
+            Method = configuration.Method ?? "POST",
+            Headers = configuration.Headers,
+            Body = configuration.Body
+        };
+
+        return JsonSerializer.Serialize(httpActivityConfig, JsonSerializerOptions);
+    }
+
+    private sealed record ResolvedStepExecutionDefinition(
+        string HandlerKey,
+        string? Config,
+        int StepOrder,
+        int MaxAttempts,
+        int RetryDelaySeconds,
+        int? TimeoutSeconds,
+        string WorkflowKey,
+        bool UseMaterializedSteps,
+        Guid? LegacyWorkflowDefinitionId);
+
+    private sealed class SendWebhookStepConfigurationSnapshot
+    {
+        public string WebhookUrl { get; set; } = string.Empty;
+        public string? Method { get; set; }
+        public Dictionary<string, string>? Headers { get; set; }
+        public string? Body { get; set; }
     }
 }

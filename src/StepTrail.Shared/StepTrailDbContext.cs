@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using StepTrail.Shared.Definitions.Persistence;
 using StepTrail.Shared.Entities;
 using StepTrail.Shared.EntityConfigurations;
 
@@ -20,6 +21,9 @@ public class StepTrailDbContext : DbContext
     public DbSet<WorkflowEvent> WorkflowEvents => Set<WorkflowEvent>();
     public DbSet<RecurringWorkflowSchedule> RecurringWorkflowSchedules => Set<RecurringWorkflowSchedule>();
     public DbSet<WorkflowSecret> WorkflowSecrets => Set<WorkflowSecret>();
+    public DbSet<ExecutableWorkflowDefinitionRecord> ExecutableWorkflowDefinitions => Set<ExecutableWorkflowDefinitionRecord>();
+    public DbSet<ExecutableTriggerDefinitionRecord> ExecutableTriggerDefinitions => Set<ExecutableTriggerDefinitionRecord>();
+    public DbSet<ExecutableStepDefinitionRecord> ExecutableStepDefinitions => Set<ExecutableStepDefinitionRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -35,5 +39,8 @@ public class StepTrailDbContext : DbContext
         modelBuilder.ApplyConfiguration(new WorkflowEventConfiguration());
         modelBuilder.ApplyConfiguration(new RecurringWorkflowScheduleConfiguration());
         modelBuilder.ApplyConfiguration(new WorkflowSecretConfiguration());
+        modelBuilder.ApplyConfiguration(new ExecutableWorkflowDefinitionRecordConfiguration());
+        modelBuilder.ApplyConfiguration(new ExecutableTriggerDefinitionRecordConfiguration());
+        modelBuilder.ApplyConfiguration(new ExecutableStepDefinitionRecordConfiguration());
     }
 }

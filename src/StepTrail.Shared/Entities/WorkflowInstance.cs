@@ -4,7 +4,10 @@ public class WorkflowInstance
 {
     public Guid Id { get; set; }
     public Guid TenantId { get; set; }
-    public Guid WorkflowDefinitionId { get; set; }
+    public Guid? WorkflowDefinitionId { get; set; }
+    public Guid? ExecutableWorkflowDefinitionId { get; set; }
+    public string? WorkflowDefinitionKey { get; set; }
+    public int? WorkflowDefinitionVersion { get; set; }
 
     /// <summary>
     /// Optional caller-provided correlation identifier.
@@ -28,7 +31,7 @@ public class WorkflowInstance
     public DateTimeOffset? CompletedAt { get; set; }
 
     public Tenant Tenant { get; set; } = null!;
-    public WorkflowDefinition WorkflowDefinition { get; set; } = null!;
+    public WorkflowDefinition? WorkflowDefinition { get; set; }
     public ICollection<WorkflowStepExecution> StepExecutions { get; set; } = [];
     public ICollection<WorkflowEvent> Events { get; set; } = [];
 }

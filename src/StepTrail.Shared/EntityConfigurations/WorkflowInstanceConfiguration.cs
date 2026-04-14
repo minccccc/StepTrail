@@ -13,7 +13,10 @@ public class WorkflowInstanceConfiguration : IEntityTypeConfiguration<WorkflowIn
         builder.HasKey(i => i.Id);
         builder.Property(i => i.Id).HasColumnName("id").ValueGeneratedOnAdd();
         builder.Property(i => i.TenantId).HasColumnName("tenant_id").IsRequired();
-        builder.Property(i => i.WorkflowDefinitionId).HasColumnName("workflow_definition_id").IsRequired();
+        builder.Property(i => i.WorkflowDefinitionId).HasColumnName("workflow_definition_id");
+        builder.Property(i => i.ExecutableWorkflowDefinitionId).HasColumnName("executable_workflow_definition_id");
+        builder.Property(i => i.WorkflowDefinitionKey).HasColumnName("workflow_definition_key").HasMaxLength(200);
+        builder.Property(i => i.WorkflowDefinitionVersion).HasColumnName("workflow_definition_version");
         builder.Property(i => i.ExternalKey).HasColumnName("external_key").HasMaxLength(500);
         builder.Property(i => i.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(500);
         builder.Property(i => i.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(50).IsRequired();
@@ -25,6 +28,7 @@ public class WorkflowInstanceConfiguration : IEntityTypeConfiguration<WorkflowIn
         builder.HasIndex(i => new { i.TenantId, i.Status });
         builder.HasIndex(i => new { i.TenantId, i.ExternalKey });
         builder.HasIndex(i => new { i.TenantId, i.IdempotencyKey });
+        builder.HasIndex(i => new { i.WorkflowDefinitionKey, i.WorkflowDefinitionVersion });
 
         builder.HasOne(i => i.Tenant)
             .WithMany(t => t.WorkflowInstances)

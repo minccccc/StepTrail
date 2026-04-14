@@ -30,12 +30,14 @@ public sealed class StepFailureService
     /// </summary>
     public async Task HandleAsync(
         WorkflowStepExecution execution,
-        WorkflowDefinitionStep stepDef,
         string error,
         string failureEventType,
         DateTimeOffset now,
         CancellationToken ct,
-        string? output = null)
+        string? output = null,
+        int maxAttempts = 1,
+        int retryDelaySeconds = 0,
+        string? workflowKey = null)
     {
         execution.Status = WorkflowStepExecutionStatus.Failed;
         execution.Error = error;
@@ -54,16 +56,21 @@ public sealed class StepFailureService
 
         bool workflowFailed = false;
 
-        if (execution.Attempt < stepDef.MaxAttempts)
+        if (execution.Attempt < maxAttempts)
         {
-            var retryAt = now.AddSeconds(stepDef.RetryDelaySeconds);
+            var retryAt = now.AddSeconds(retryDelaySeconds);
 
             var retryExecution = new WorkflowStepExecution
             {
                 Id = Guid.NewGuid(),
                 WorkflowInstanceId = execution.WorkflowInstanceId,
                 WorkflowDefinitionStepId = execution.WorkflowDefinitionStepId,
+                ExecutableStepDefinitionId = execution.ExecutableStepDefinitionId,
                 StepKey = execution.StepKey,
+                StepOrder = execution.StepOrder,
+                StepType = execution.StepType,
+                StepConfiguration = execution.StepConfiguration,
+                RetryPolicyOverrideKey = execution.RetryPolicyOverrideKey,
                 Status = WorkflowStepExecutionStatus.Pending,
                 Attempt = execution.Attempt + 1,
                 Input = execution.Input,
@@ -85,7 +92,7 @@ public sealed class StepFailureService
             _logger.LogWarning(
                 "Step {StepKey} attempt {Attempt}/{MaxAttempts} failed [{EventType}] — " +
                 "retry {NextAttempt} scheduled at {RetryAt}",
-                execution.StepKey, execution.Attempt, stepDef.MaxAttempts,
+                execution.StepKey, execution.Attempt, maxAttempts,
                 failureEventType, execution.Attempt + 1, retryAt);
         }
         else
@@ -113,25 +120,25 @@ public sealed class StepFailureService
             _logger.LogError(
                 "Step {StepKey} failed after {MaxAttempts} attempt(s) [{EventType}] — " +
                 "workflow instance {InstanceId} is now Failed",
-                execution.StepKey, stepDef.MaxAttempts, failureEventType, execution.WorkflowInstanceId);
+                execution.StepKey, maxAttempts, failureEventType, execution.WorkflowInstanceId);
         }
 
         await _db.SaveChangesAsync(ct);
 
         // Fire alerts after the DB commit so we never alert on a rolled-back failure.
-        var workflowKey = await ResolveWorkflowKeyAsync(stepDef.WorkflowDefinitionId, ct);
+        workflowKey ??= await ResolveWorkflowKeyAsync(execution.WorkflowInstanceId, execution.WorkflowDefinitionStepId, ct);
 
         if (failureEventType == WorkflowEventTypes.StepOrphaned)
         {
             await _alertService.SendAsync(new AlertPayload
             {
-                AlertType         = "StepOrphaned",
+                AlertType = "StepOrphaned",
                 WorkflowInstanceId = execution.WorkflowInstanceId,
-                WorkflowKey       = workflowKey,
-                StepKey           = execution.StepKey,
-                Attempt           = execution.Attempt,
-                Error             = error,
-                OccurredAt        = now
+                WorkflowKey = workflowKey,
+                StepKey = execution.StepKey,
+                Attempt = execution.Attempt,
+                Error = error,
+                OccurredAt = now
             }, ct);
         }
 
@@ -139,20 +146,43 @@ public sealed class StepFailureService
         {
             await _alertService.SendAsync(new AlertPayload
             {
-                AlertType         = "WorkflowFailed",
+                AlertType = "WorkflowFailed",
                 WorkflowInstanceId = execution.WorkflowInstanceId,
-                WorkflowKey       = workflowKey,
-                StepKey           = execution.StepKey,
-                Attempt           = execution.Attempt,
-                Error             = error,
-                OccurredAt        = now
+                WorkflowKey = workflowKey,
+                StepKey = execution.StepKey,
+                Attempt = execution.Attempt,
+                Error = error,
+                OccurredAt = now
             }, ct);
         }
     }
 
-    private async Task<string> ResolveWorkflowKeyAsync(Guid workflowDefinitionId, CancellationToken ct)
+    private async Task<string> ResolveWorkflowKeyAsync(Guid workflowInstanceId, Guid? workflowDefinitionStepId, CancellationToken ct)
     {
-        var definition = await _db.WorkflowDefinitions.FindAsync([workflowDefinitionId], ct);
-        return definition?.Key ?? workflowDefinitionId.ToString();
+        var instance = await _db.WorkflowInstances
+            .AsNoTracking()
+            .FirstOrDefaultAsync(i => i.Id == workflowInstanceId, ct);
+
+        if (!string.IsNullOrWhiteSpace(instance?.WorkflowDefinitionKey))
+            return instance.WorkflowDefinitionKey!;
+
+        if (workflowDefinitionStepId.HasValue)
+        {
+            var stepDefinition = await _db.WorkflowDefinitionSteps
+                .AsNoTracking()
+                .FirstOrDefaultAsync(step => step.Id == workflowDefinitionStepId.Value, ct);
+
+            if (stepDefinition is null)
+                return workflowInstanceId.ToString();
+
+            var definition = await _db.WorkflowDefinitions
+                .AsNoTracking()
+                .FirstOrDefaultAsync(workflow => workflow.Id == stepDefinition.WorkflowDefinitionId, ct);
+
+            if (!string.IsNullOrWhiteSpace(definition?.Key))
+                return definition.Key;
+        }
+
+        return workflowInstanceId.ToString();
     }
 }

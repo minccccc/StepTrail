@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using StepTrail.Shared.Definitions;
 using StepTrail.Shared.Workflows;
 
 namespace StepTrail.Shared;
@@ -38,6 +39,9 @@ public static class ServiceCollectionExtensions
                 if (migrationsAssembly is not null)
                     npgsql.MigrationsAssembly(migrationsAssembly);
             }));
+        services.AddScoped<IWorkflowDefinitionValidator, WorkflowDefinitionValidator>();
+        services.AddScoped<IWorkflowDefinitionActivationGuard, WorkflowDefinitionActivationGuard>();
+        services.AddScoped<IWorkflowDefinitionRepository, WorkflowDefinitionRepository>();
 
         return services;
     }

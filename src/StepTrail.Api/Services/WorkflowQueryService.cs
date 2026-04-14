@@ -39,7 +39,11 @@ public sealed class WorkflowQueryService
             query = query.Where(i => i.TenantId == tenantId.Value);
 
         if (!string.IsNullOrWhiteSpace(workflowKey))
-            query = query.Where(i => i.WorkflowDefinition.Key == workflowKey);
+        {
+            query = query.Where(i =>
+                i.WorkflowDefinitionKey == workflowKey ||
+                (i.WorkflowDefinition != null && i.WorkflowDefinition.Key == workflowKey));
+        }
 
         if (!string.IsNullOrWhiteSpace(status))
         {
@@ -57,18 +61,27 @@ public sealed class WorkflowQueryService
             .Take(pageSize)
             .ToListAsync(ct);
 
-        // Fetch the most-recent step execution per instance in a single query
         var instanceIds = items.Select(i => i.Id).ToList();
-        var recentSteps = await _db.WorkflowStepExecutions
+        var stepExecutions = await _db.WorkflowStepExecutions
             .Where(e => instanceIds.Contains(e.WorkflowInstanceId))
-            .Select(e => new { e.WorkflowInstanceId, e.StepKey, e.CreatedAt })
+            .Select(e => new StepExecutionProjection(
+                e.WorkflowInstanceId,
+                e.StepKey,
+                e.Status,
+                e.StepOrder,
+                e.Attempt,
+                e.CreatedAt,
+                e.StartedAt,
+                e.CompletedAt))
             .ToListAsync(ct);
 
-        var currentStepLookup = recentSteps
+        var currentStepLookup = stepExecutions
             .GroupBy(e => e.WorkflowInstanceId)
             .ToDictionary(
                 g => g.Key,
-                g => g.OrderByDescending(e => e.CreatedAt).First().StepKey);
+                g => ResolveCurrentStep(
+                    items.First(instance => instance.Id == g.Key).Status,
+                    g.ToList()));
 
         return new PagedResult<WorkflowInstanceSummary>
         {
@@ -76,8 +89,12 @@ public sealed class WorkflowQueryService
             {
                 Id = i.Id,
                 TenantId = i.TenantId,
-                WorkflowKey = i.WorkflowDefinition.Key,
-                WorkflowVersion = i.WorkflowDefinition.Version,
+                WorkflowKey = i.WorkflowDefinitionKey
+                    ?? i.WorkflowDefinition?.Key
+                    ?? string.Empty,
+                WorkflowVersion = i.WorkflowDefinitionVersion
+                    ?? i.WorkflowDefinition?.Version
+                    ?? 0,
                 Status = i.Status.ToString(),
                 ExternalKey = i.ExternalKey,
                 IdempotencyKey = i.IdempotencyKey,
@@ -109,8 +126,12 @@ public sealed class WorkflowQueryService
         {
             Id = instance.Id,
             TenantId = instance.TenantId,
-            WorkflowKey = instance.WorkflowDefinition.Key,
-            WorkflowVersion = instance.WorkflowDefinition.Version,
+            WorkflowKey = instance.WorkflowDefinitionKey
+                ?? instance.WorkflowDefinition?.Key
+                ?? string.Empty,
+            WorkflowVersion = instance.WorkflowDefinitionVersion
+                ?? instance.WorkflowDefinition?.Version
+                ?? 0,
             Status = instance.Status.ToString(),
             ExternalKey = instance.ExternalKey,
             IdempotencyKey = instance.IdempotencyKey,
@@ -120,6 +141,8 @@ public sealed class WorkflowQueryService
             CompletedAt = instance.CompletedAt,
             StepExecutions = instance.StepExecutions
                 .OrderBy(e => e.CreatedAt)
+                .ThenBy(e => e.StepOrder ?? int.MaxValue)
+                .ThenBy(e => e.Attempt)
                 .Select(e => new StepExecutionSummary
                 {
                     Id = e.Id,
@@ -169,4 +192,64 @@ public sealed class WorkflowQueryService
             CreatedAt = e.CreatedAt
         }).ToList();
     }
+
+    private static string? ResolveCurrentStep(
+        WorkflowInstanceStatus instanceStatus,
+        IReadOnlyList<StepExecutionProjection> stepExecutions)
+    {
+        if (stepExecutions.Count == 0)
+            return null;
+
+        var activeStep = stepExecutions
+            .Where(step => step.Status is WorkflowStepExecutionStatus.Pending or WorkflowStepExecutionStatus.Running)
+            .OrderBy(step => step.StepOrder ?? int.MaxValue)
+            .ThenByDescending(step => step.StartedAt ?? step.CreatedAt)
+            .FirstOrDefault();
+
+        if (activeStep is not null)
+            return activeStep.StepKey;
+
+        var failedStep = stepExecutions
+            .Where(step => step.Status == WorkflowStepExecutionStatus.Failed)
+            .OrderByDescending(step => step.CompletedAt ?? step.CreatedAt)
+            .ThenByDescending(step => step.Attempt)
+            .FirstOrDefault();
+
+        if (instanceStatus == WorkflowInstanceStatus.Failed && failedStep is not null)
+            return failedStep.StepKey;
+
+        var terminalStep = stepExecutions
+            .Where(step => step.Status is WorkflowStepExecutionStatus.Completed or WorkflowStepExecutionStatus.Cancelled)
+            .OrderByDescending(step => step.StepOrder ?? int.MinValue)
+            .ThenByDescending(step => step.CompletedAt ?? step.CreatedAt)
+            .FirstOrDefault();
+
+        if (instanceStatus is WorkflowInstanceStatus.Completed or WorkflowInstanceStatus.Cancelled or WorkflowInstanceStatus.Archived)
+            return terminalStep?.StepKey ?? failedStep?.StepKey;
+
+        var notStartedStep = stepExecutions
+            .Where(step => step.Status == WorkflowStepExecutionStatus.NotStarted)
+            .OrderBy(step => step.StepOrder ?? int.MaxValue)
+            .ThenBy(step => step.CreatedAt)
+            .FirstOrDefault();
+
+        return failedStep?.StepKey
+            ?? notStartedStep?.StepKey
+            ?? terminalStep?.StepKey
+            ?? stepExecutions
+                .OrderByDescending(step => step.CreatedAt)
+                .ThenByDescending(step => step.StepOrder ?? int.MinValue)
+                .Select(step => step.StepKey)
+                .FirstOrDefault();
+    }
+
+    private sealed record StepExecutionProjection(
+        Guid WorkflowInstanceId,
+        string StepKey,
+        WorkflowStepExecutionStatus Status,
+        int? StepOrder,
+        int Attempt,
+        DateTimeOffset CreatedAt,
+        DateTimeOffset? StartedAt,
+        DateTimeOffset? CompletedAt);
 }

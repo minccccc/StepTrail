@@ -4,12 +4,17 @@ public class WorkflowStepExecution
 {
     public Guid Id { get; set; }
     public Guid WorkflowInstanceId { get; set; }
-    public Guid WorkflowDefinitionStepId { get; set; }
+    public Guid? WorkflowDefinitionStepId { get; set; }
+    public Guid? ExecutableStepDefinitionId { get; set; }
 
     /// <summary>
     /// Denormalized step key for easier querying without joins.
     /// </summary>
     public string StepKey { get; set; } = string.Empty;
+    public int? StepOrder { get; set; }
+    public string? StepType { get; set; }
+    public string? StepConfiguration { get; set; }
+    public string? RetryPolicyOverrideKey { get; set; }
 
     public WorkflowStepExecutionStatus Status { get; set; }
 
@@ -61,6 +66,6 @@ public class WorkflowStepExecution
     public DateTimeOffset UpdatedAt { get; set; }
 
     public WorkflowInstance WorkflowInstance { get; set; } = null!;
-    public WorkflowDefinitionStep WorkflowDefinitionStep { get; set; } = null!;
+    public WorkflowDefinitionStep? WorkflowDefinitionStep { get; set; }
     public ICollection<WorkflowEvent> Events { get; set; } = [];
 }

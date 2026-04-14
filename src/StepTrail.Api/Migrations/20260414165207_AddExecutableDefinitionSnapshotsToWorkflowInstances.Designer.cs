@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using StepTrail.Shared;
@@ -11,9 +12,11 @@ using StepTrail.Shared;
 namespace StepTrail.Api.Migrations
 {
     [DbContext(typeof(StepTrailDbContext))]
-    partial class StepTrailDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260414165207_AddExecutableDefinitionSnapshotsToWorkflowInstances")]
+    partial class AddExecutableDefinitionSnapshotsToWorkflowInstances
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -140,11 +143,6 @@ namespace StepTrail.Api.Migrations
                         .HasColumnName("version");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("Key")
-                        .IsUnique()
-                        .HasDatabaseName("ux_executable_workflow_definitions_active_key")
-                        .HasFilter("\"status\" = 'Active'");
 
                     b.HasIndex("Key", "Status");
 

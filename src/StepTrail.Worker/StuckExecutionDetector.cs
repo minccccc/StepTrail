@@ -61,25 +61,45 @@ public sealed class StuckExecutionDetector
             {
                 _logger.LogWarning(
                     "Orphaned step execution {ExecutionId} detected " +
-                    "(step: {StepKey}, instance: {InstanceId}, attempt: {Attempt}) — " +
+                    "(step: {StepKey}, instance: {InstanceId}, attempt: {Attempt}) - " +
                     "lock held by '{LockedBy}' expired at {LockExpiresAt:O}",
-                    execution.Id, execution.StepKey, execution.WorkflowInstanceId,
-                    execution.Attempt, execution.LockedBy ?? "unknown", execution.LockExpiresAt);
+                    execution.Id,
+                    execution.StepKey,
+                    execution.WorkflowInstanceId,
+                    execution.Attempt,
+                    execution.LockedBy ?? "unknown",
+                    execution.LockExpiresAt);
 
-                var stepDef = await _db.WorkflowDefinitionSteps
-                    .FindAsync([execution.WorkflowDefinitionStepId], ct)
-                    ?? throw new InvalidOperationException(
-                        $"WorkflowDefinitionStep {execution.WorkflowDefinitionStepId} not found " +
-                        $"while recovering orphan {execution.Id}.");
-
-                var error = $"Step execution timed out — lock held by '{execution.LockedBy ?? "unknown"}' " +
+                var error = $"Step execution timed out - lock held by '{execution.LockedBy ?? "unknown"}' " +
                             $"expired at {execution.LockExpiresAt:yyyy-MM-dd HH:mm:ss} UTC. " +
                             "Worker may have crashed.";
 
+                if (execution.WorkflowDefinitionStepId.HasValue)
+                {
+                    var stepDefinition = await _db.WorkflowDefinitionSteps
+                        .FindAsync([execution.WorkflowDefinitionStepId.Value], ct)
+                        ?? throw new InvalidOperationException(
+                            $"WorkflowDefinitionStep {execution.WorkflowDefinitionStepId.Value} not found " +
+                            $"while recovering orphan {execution.Id}.");
+
+                    await _failureService.HandleAsync(
+                        execution,
+                        error,
+                        WorkflowEventTypes.StepOrphaned,
+                        now,
+                        ct,
+                        maxAttempts: stepDefinition.MaxAttempts,
+                        retryDelaySeconds: stepDefinition.RetryDelaySeconds);
+
+                    continue;
+                }
+
                 await _failureService.HandleAsync(
-                    execution, stepDef, error,
+                    execution,
+                    error,
                     WorkflowEventTypes.StepOrphaned,
-                    now, ct);
+                    now,
+                    ct);
             }
 
             await tx.CommitAsync(ct);
