@@ -1,12 +1,17 @@
 using Microsoft.EntityFrameworkCore;
 using StepTrail.Shared;
+using StepTrail.Shared.Definitions;
+using StepTrail.Shared.Definitions.Persistence;
 using StepTrail.Shared.Entities;
 
 namespace StepTrail.Api.Services;
 
 /// <summary>
-/// Seeds representative workflow instances for local development only.
-/// Creates one instance per status so every UI state is visible immediately.
+/// Seeds representative workflow definitions and instances for local development.
+/// Creates definitions from built-in templates, activates them, and creates
+/// instances in various statuses so every UI state is visible immediately.
+///
+/// Every instance is properly associated with an executable workflow definition.
 /// Idempotent — skips seeding if any seed instance is already present.
 /// </summary>
 public sealed class DevDataSeedService : IHostedService
@@ -26,282 +31,321 @@ public sealed class DevDataSeedService : IHostedService
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<StepTrailDbContext>();
+        var repository = scope.ServiceProvider.GetRequiredService<IWorkflowDefinitionRepository>();
 
-        // Idempotency check — bail out if already seeded
-        if (await db.WorkflowInstances.AnyAsync(i => i.ExternalKey == "seed-alice", ct))
+        if (await db.WorkflowInstances.AnyAsync(i => i.ExternalKey == "seed-forward-ok", ct))
         {
             _logger.LogDebug("Dev seed data already present — skipping");
             return;
         }
 
-        // Load the workflow definition (synced by WorkflowDefinitionSyncService before us)
-        var definition = await db.WorkflowDefinitions
-            .Include(d => d.Steps)
-            .FirstOrDefaultAsync(d => d.Key == "user-onboarding" && d.Version == 1, ct);
+        // ── Create and activate workflow definitions from templates ──────────────
+        var forwardDef = await CreateAndActivateAsync(repository,
+            "seed-forward", "Seed: Webhook Forward",
+            TriggerDefinition.CreateWebhook(Guid.NewGuid(), new WebhookTriggerConfiguration("seed-forward")),
+            [
+                StepDefinition.CreateTransform(Guid.NewGuid(), "transform-input", 1,
+                    new TransformStepConfiguration([
+                        new TransformValueMapping("eventType", "{{input.type}}"),
+                        new TransformValueMapping("payload", "{{input.data}}")
+                    ])),
+                StepDefinition.CreateHttpRequest(Guid.NewGuid(), "forward-payload", 2,
+                    new HttpRequestStepConfiguration("https://httpbin.org/post", "POST"),
+                    retryPolicy: new RetryPolicy(3, 15, BackoffStrategy.Fixed))
+            ],
+            "webhook-transform-forward", ct);
 
-        if (definition is null)
-        {
-            _logger.LogWarning("Workflow definition 'user-onboarding' v1 not found — dev seed skipped");
-            return;
-        }
+        var chainDef = await CreateAndActivateAsync(repository,
+            "seed-api-chain", "Seed: API Chain",
+            TriggerDefinition.CreateWebhook(Guid.NewGuid(), new WebhookTriggerConfiguration("seed-api-chain")),
+            [
+                StepDefinition.CreateTransform(Guid.NewGuid(), "transform-for-api-a", 1,
+                    new TransformStepConfiguration([
+                        new TransformValueMapping("requestId", "{{input.id}}"),
+                        new TransformValueMapping("action", "{{input.action}}")
+                    ])),
+                StepDefinition.CreateHttpRequest(Guid.NewGuid(), "call-api-a", 2,
+                    new HttpRequestStepConfiguration("https://httpbin.org/post", "POST"),
+                    retryPolicy: new RetryPolicy(3, 10, BackoffStrategy.Fixed)),
+                StepDefinition.CreateTransform(Guid.NewGuid(), "transform-for-api-b", 3,
+                    new TransformStepConfiguration([
+                        new TransformValueMapping("sourceId", "{{steps.call-api-a.output.id}}"),
+                        new TransformValueMapping("status", "{{steps.call-api-a.output.status}}")
+                    ])),
+                StepDefinition.CreateHttpRequest(Guid.NewGuid(), "call-api-b", 4,
+                    new HttpRequestStepConfiguration("https://httpbin.org/post", "POST"),
+                    retryPolicy: new RetryPolicy(3, 15, BackoffStrategy.Fixed))
+            ],
+            "webhook-api-chain", ct);
 
-        var step1 = definition.Steps.First(s => s.Order == 1); // send-welcome-email
-        var step2 = definition.Steps.First(s => s.Order == 2); // provision-account
-        var step3 = definition.Steps.First(s => s.Order == 3); // notify-team
+        // Read back persisted records to get the DB-mapped IDs for step definitions
+        var forwardRecord = await db.ExecutableWorkflowDefinitions
+            .Include(d => d.StepDefinitions.OrderBy(s => s.Order))
+            .FirstAsync(d => d.Key == "seed-forward", ct);
 
+        var chainRecord = await db.ExecutableWorkflowDefinitions
+            .Include(d => d.StepDefinitions.OrderBy(s => s.Order))
+            .FirstAsync(d => d.Key == "seed-api-chain", ct);
+
+        // ── Create instances for the forward workflow ────────────────────────────
         var now = DateTimeOffset.UtcNow;
 
-        // ── 1. Completed ────────────────────────────────────────────────────────────
-        SeedCompleted(db, definition, step1, step2, step3, now);
+        SeedCompletedInstance(db, forwardRecord, now.AddHours(-2), "seed-forward-ok",
+            """{"type":"order.created","data":{"orderId":1001}}""");
 
-        // ── 2. Failed — exhausted all retries on step 2 ─────────────────────────────
-        SeedFailedMaxRetries(db, definition, step1, step2, now);
+        SeedFailedInstance(db, forwardRecord, now.AddHours(-1), "seed-forward-fail",
+            """{"type":"user.deleted","data":{"userId":42}}""",
+            "Connection refused: https://httpbin.org/post");
 
-        // ── 3. Failed — first attempt failure, retryable ────────────────────────────
-        SeedFailedRetryable(db, definition, step1, now);
+        SeedPendingInstance(db, forwardRecord, now.AddSeconds(-10), "seed-forward-pending",
+            """{"type":"invoice.sent","data":{"invoiceId":789}}""");
 
-        // ── 4. Running — step 2 currently executing ─────────────────────────────────
-        SeedRunning(db, definition, step1, step2, now);
+        // ── Create instances for the chain workflow ──────────────────────────────
+        SeedCompletedInstance(db, chainRecord, now.AddHours(-3), "seed-chain-ok",
+            """{"id":"req-001","action":"sync","payload":{"customerId":"cust-42"}}""");
 
-        // ── 5. Pending — just created, nothing started yet ──────────────────────────
-        SeedPending(db, definition, step1, now);
+        SeedPartialFailureInstance(db, chainRecord, now.AddMinutes(-30), "seed-chain-partial",
+            """{"id":"req-002","action":"process","payload":{"customerId":"cust-99"}}""",
+            "HTTP 502 Bad Gateway from https://httpbin.org/post");
 
-        // ── 6. Cancelled ────────────────────────────────────────────────────────────
-        SeedCancelled(db, definition, step1, step2, now);
+        SeedRunningInstance(db, chainRecord, now.AddMinutes(-2), "seed-chain-running",
+            """{"id":"req-003","action":"validate","payload":{"customerId":"cust-55"}}""");
 
         await db.SaveChangesAsync(ct);
-        _logger.LogInformation("Dev seed data created — 6 workflow instances across all statuses");
+        _logger.LogInformation("Dev seed data created — 2 workflow definitions, 6 instances");
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
 
-    // ────────────────────────────────────────────────────────────────────────────────
+    // ── Definition creation ─────────────────────────────────────────────────────
 
-    private static void SeedCompleted(
-        StepTrailDbContext db,
-        WorkflowDefinition def,
-        WorkflowDefinitionStep s1,
-        WorkflowDefinitionStep s2,
-        WorkflowDefinitionStep s3,
-        DateTimeOffset now)
+    private static async Task<StepTrail.Shared.Definitions.WorkflowDefinition> CreateAndActivateAsync(
+        IWorkflowDefinitionRepository repository,
+        string key, string name,
+        TriggerDefinition trigger,
+        List<StepDefinition> steps,
+        string sourceTemplateKey,
+        CancellationToken ct)
     {
-        var start = now.AddHours(-2);
-        var inst = Instance(def, "seed-alice", WorkflowInstanceStatus.Completed,
-            input: """{"userId":"alice@example.com","plan":"pro"}""",
-            createdAt: start, completedAt: start.AddMinutes(3));
+        var now = DateTimeOffset.UtcNow;
 
-        var e1 = StepExec(inst, s1, WorkflowStepExecutionStatus.Completed, attempt: 1,
-            scheduledAt: start,
-            startedAt: start.AddSeconds(5),
-            completedAt: start.AddSeconds(12),
-            input: """{"userId":"alice@example.com","plan":"pro"}""",
-            output: """{"emailSent":true,"recipient":"alice@example.com"}""");
+        var definition = new StepTrail.Shared.Definitions.WorkflowDefinition(
+            Guid.NewGuid(), key, name, 1,
+            WorkflowDefinitionStatus.Inactive, trigger, steps, now, now,
+            $"Dev seed — created from '{sourceTemplateKey}' template.",
+            sourceTemplateKey: sourceTemplateKey, sourceTemplateVersion: 1);
 
-        var e2 = StepExec(inst, s2, WorkflowStepExecutionStatus.Completed, attempt: 1,
-            scheduledAt: start.AddSeconds(12),
-            startedAt: start.AddSeconds(17),
-            completedAt: start.AddSeconds(45),
-            input: """{"emailSent":true,"recipient":"alice@example.com"}""",
-            output: """{"accountId":"acc-10001","status":"active"}""");
+        await repository.SaveNewVersionAsync(definition, ct);
 
-        var e3 = StepExec(inst, s3, WorkflowStepExecutionStatus.Completed, attempt: 1,
-            scheduledAt: start.AddSeconds(45),
-            startedAt: start.AddSeconds(50),
-            completedAt: start.AddMinutes(3),
-            input: """{"accountId":"acc-10001","status":"active"}""",
-            output: """{"notified":true,"channel":"#new-users"}""");
+        // Activate
+        var saved = (await repository.GetActiveByKeyAsync(key, ct))
+                    ?? await repository.GetByKeyAndVersionAsync(key, 1, ct);
 
-        db.WorkflowInstances.Add(inst);
-        db.WorkflowStepExecutions.AddRange(e1, e2, e3);
-        db.WorkflowEvents.AddRange(
-            Event(inst, null,  WorkflowEventTypes.WorkflowStarted,   start),
-            Event(inst, e1,    WorkflowEventTypes.StepStarted,        start.AddSeconds(5)),
-            Event(inst, e1,    WorkflowEventTypes.StepCompleted,      start.AddSeconds(12)),
-            Event(inst, e2,    WorkflowEventTypes.StepStarted,        start.AddSeconds(17)),
-            Event(inst, e2,    WorkflowEventTypes.StepCompleted,      start.AddSeconds(45)),
-            Event(inst, e3,    WorkflowEventTypes.StepStarted,        start.AddSeconds(50)),
-            Event(inst, e3,    WorkflowEventTypes.StepCompleted,      start.AddMinutes(3)),
-            Event(inst, null,  WorkflowEventTypes.WorkflowCompleted,  start.AddMinutes(3)));
+        var activated = new StepTrail.Shared.Definitions.WorkflowDefinition(
+            saved!.Id, saved.Key, saved.Name, saved.Version,
+            WorkflowDefinitionStatus.Active, saved.TriggerDefinition, saved.StepDefinitions,
+            saved.CreatedAtUtc, DateTimeOffset.UtcNow, saved.Description,
+            saved.SourceTemplateKey, saved.SourceTemplateVersion);
+
+        return await repository.UpdateAsync(activated, ct);
     }
 
-    private static void SeedFailedMaxRetries(
+    // ── Instance seeding ────────────────────────────────────────────────────────
+
+    private static void SeedCompletedInstance(
         StepTrailDbContext db,
-        WorkflowDefinition def,
-        WorkflowDefinitionStep s1,
-        WorkflowDefinitionStep s2,
-        DateTimeOffset now)
-    {
-        var start = now.AddHours(-1);
-        const string provisionError = "AccountService: quota exceeded — no capacity for new accounts";
-
-        var inst = Instance(def, "seed-bob", WorkflowInstanceStatus.Failed,
-            input: """{"userId":"bob@example.com","plan":"enterprise"}""",
-            createdAt: start, completedAt: start.AddMinutes(3));
-
-        var e1 = StepExec(inst, s1, WorkflowStepExecutionStatus.Completed, attempt: 1,
-            scheduledAt: start, startedAt: start.AddSeconds(5), completedAt: start.AddSeconds(10),
-            input: """{"userId":"bob@example.com","plan":"enterprise"}""",
-            output: """{"emailSent":true,"recipient":"bob@example.com"}""");
-
-        var f1 = StepExec(inst, s2, WorkflowStepExecutionStatus.Failed, attempt: 1,
-            scheduledAt: start.AddSeconds(10), startedAt: start.AddSeconds(15),
-            completedAt: start.AddSeconds(18),
-            input: """{"emailSent":true,"recipient":"bob@example.com"}""",
-            error: provisionError);
-
-        var f2 = StepExec(inst, s2, WorkflowStepExecutionStatus.Failed, attempt: 2,
-            scheduledAt: start.AddSeconds(48), startedAt: start.AddSeconds(53),
-            completedAt: start.AddSeconds(57),
-            input: """{"emailSent":true,"recipient":"bob@example.com"}""",
-            error: provisionError);
-
-        var f3 = StepExec(inst, s2, WorkflowStepExecutionStatus.Failed, attempt: 3,
-            scheduledAt: start.AddSeconds(87), startedAt: start.AddSeconds(92),
-            completedAt: start.AddSeconds(96),
-            input: """{"emailSent":true,"recipient":"bob@example.com"}""",
-            error: provisionError);
-
-        db.WorkflowInstances.Add(inst);
-        db.WorkflowStepExecutions.AddRange(e1, f1, f2, f3);
-        db.WorkflowEvents.AddRange(
-            Event(inst, null, WorkflowEventTypes.WorkflowStarted,    start),
-            Event(inst, e1,   WorkflowEventTypes.StepStarted,         start.AddSeconds(5)),
-            Event(inst, e1,   WorkflowEventTypes.StepCompleted,       start.AddSeconds(10)),
-            Event(inst, f1,   WorkflowEventTypes.StepStarted,         start.AddSeconds(15)),
-            Event(inst, f1,   WorkflowEventTypes.StepFailed,          start.AddSeconds(18)),
-            Event(inst, f2,   WorkflowEventTypes.StepRetryScheduled,  start.AddSeconds(18)),
-            Event(inst, f2,   WorkflowEventTypes.StepStarted,         start.AddSeconds(53)),
-            Event(inst, f2,   WorkflowEventTypes.StepFailed,          start.AddSeconds(57)),
-            Event(inst, f3,   WorkflowEventTypes.StepRetryScheduled,  start.AddSeconds(57)),
-            Event(inst, f3,   WorkflowEventTypes.StepStarted,         start.AddSeconds(92)),
-            Event(inst, f3,   WorkflowEventTypes.StepFailed,          start.AddSeconds(96)),
-            Event(inst, null, WorkflowEventTypes.WorkflowFailed,      start.AddSeconds(96)));
-    }
-
-    private static void SeedFailedRetryable(
-        StepTrailDbContext db,
-        WorkflowDefinition def,
-        WorkflowDefinitionStep s1,
-        DateTimeOffset now)
-    {
-        var start = now.AddMinutes(-20);
-
-        var inst = Instance(def, "seed-charlie", WorkflowInstanceStatus.Failed,
-            input: """{"userId":"charlie@example.com","plan":"starter"}""",
-            createdAt: start, completedAt: start.AddMinutes(1));
-
-        var f1 = StepExec(inst, s1, WorkflowStepExecutionStatus.Failed, attempt: 1,
-            scheduledAt: start, startedAt: start.AddSeconds(5), completedAt: start.AddSeconds(8),
-            input: """{"userId":"charlie@example.com","plan":"starter"}""",
-            error: "SMTP connection refused at smtp.example.com:587");
-
-        db.WorkflowInstances.Add(inst);
-        db.WorkflowStepExecutions.Add(f1);
-        db.WorkflowEvents.AddRange(
-            Event(inst, null, WorkflowEventTypes.WorkflowStarted, start),
-            Event(inst, f1,   WorkflowEventTypes.StepStarted,      start.AddSeconds(5)),
-            Event(inst, f1,   WorkflowEventTypes.StepFailed,       start.AddSeconds(8)),
-            Event(inst, null, WorkflowEventTypes.WorkflowFailed,   start.AddSeconds(8)));
-    }
-
-    private static void SeedRunning(
-        StepTrailDbContext db,
-        WorkflowDefinition def,
-        WorkflowDefinitionStep s1,
-        WorkflowDefinitionStep s2,
-        DateTimeOffset now)
-    {
-        var start = now.AddMinutes(-2);
-
-        var inst = Instance(def, "seed-dave", WorkflowInstanceStatus.Running,
-            input: """{"userId":"dave@example.com","plan":"pro"}""",
-            createdAt: start);
-
-        var e1 = StepExec(inst, s1, WorkflowStepExecutionStatus.Completed, attempt: 1,
-            scheduledAt: start, startedAt: start.AddSeconds(5), completedAt: start.AddSeconds(11),
-            input: """{"userId":"dave@example.com","plan":"pro"}""",
-            output: """{"emailSent":true,"recipient":"dave@example.com"}""");
-
-        var r2 = StepExec(inst, s2, WorkflowStepExecutionStatus.Running, attempt: 1,
-            scheduledAt: start.AddSeconds(11), startedAt: start.AddSeconds(16),
-            input: """{"emailSent":true,"recipient":"dave@example.com"}""",
-            lockedBy: "worker-dev-001");
-
-        db.WorkflowInstances.Add(inst);
-        db.WorkflowStepExecutions.AddRange(e1, r2);
-        db.WorkflowEvents.AddRange(
-            Event(inst, null, WorkflowEventTypes.WorkflowStarted, start),
-            Event(inst, e1,   WorkflowEventTypes.StepStarted,      start.AddSeconds(5)),
-            Event(inst, e1,   WorkflowEventTypes.StepCompleted,    start.AddSeconds(11)),
-            Event(inst, r2,   WorkflowEventTypes.StepStarted,      start.AddSeconds(16)));
-    }
-
-    private static void SeedPending(
-        StepTrailDbContext db,
-        WorkflowDefinition def,
-        WorkflowDefinitionStep s1,
-        DateTimeOffset now)
-    {
-        var start = now.AddSeconds(-10);
-
-        var inst = Instance(def, "seed-eve", WorkflowInstanceStatus.Pending,
-            input: """{"userId":"eve@example.com","plan":"starter"}""",
-            createdAt: start);
-
-        var p1 = StepExec(inst, s1, WorkflowStepExecutionStatus.Pending, attempt: 1,
-            scheduledAt: start,
-            input: """{"userId":"eve@example.com","plan":"starter"}""");
-
-        db.WorkflowInstances.Add(inst);
-        db.WorkflowStepExecutions.Add(p1);
-        db.WorkflowEvents.Add(Event(inst, null, WorkflowEventTypes.WorkflowStarted, start));
-    }
-
-    private static void SeedCancelled(
-        StepTrailDbContext db,
-        WorkflowDefinition def,
-        WorkflowDefinitionStep s1,
-        WorkflowDefinitionStep s2,
-        DateTimeOffset now)
-    {
-        var start = now.AddHours(-3);
-        var cancelled = start.AddMinutes(30);
-
-        var inst = Instance(def, "seed-frank", WorkflowInstanceStatus.Cancelled,
-            input: """{"userId":"frank@example.com","plan":"pro"}""",
-            createdAt: start, completedAt: cancelled);
-
-        var e1 = StepExec(inst, s1, WorkflowStepExecutionStatus.Completed, attempt: 1,
-            scheduledAt: start, startedAt: start.AddSeconds(5), completedAt: start.AddSeconds(10),
-            input: """{"userId":"frank@example.com","plan":"pro"}""",
-            output: """{"emailSent":true,"recipient":"frank@example.com"}""");
-
-        var c2 = StepExec(inst, s2, WorkflowStepExecutionStatus.Cancelled, attempt: 1,
-            scheduledAt: start.AddSeconds(10),
-            input: """{"emailSent":true,"recipient":"frank@example.com"}""");
-
-        db.WorkflowInstances.Add(inst);
-        db.WorkflowStepExecutions.AddRange(e1, c2);
-        db.WorkflowEvents.AddRange(
-            Event(inst, null, WorkflowEventTypes.WorkflowStarted,   start),
-            Event(inst, e1,   WorkflowEventTypes.StepStarted,        start.AddSeconds(5)),
-            Event(inst, e1,   WorkflowEventTypes.StepCompleted,      start.AddSeconds(10)),
-            Event(inst, null, WorkflowEventTypes.WorkflowCancelled,  cancelled));
-    }
-
-    // ── Factories ────────────────────────────────────────────────────────────────────
-
-    private static WorkflowInstance Instance(
-        WorkflowDefinition def,
+        ExecutableWorkflowDefinitionRecord def,
+        DateTimeOffset start,
         string externalKey,
-        WorkflowInstanceStatus status,
-        string? input,
+        string input)
+    {
+        var inst = CreateInstance(def, start, externalKey, input, WorkflowInstanceStatus.Completed,
+            completedAt: start.AddMinutes(1));
+
+        var elapsed = 0;
+        foreach (var stepDef in def.StepDefinitions)
+        {
+            var stepStart = start.AddSeconds(elapsed + 5);
+            var stepEnd = start.AddSeconds(elapsed + 12);
+            db.WorkflowStepExecutions.Add(CreateStepExecution(inst, stepDef,
+                WorkflowStepExecutionStatus.Completed, 1, stepStart, stepEnd,
+                input: elapsed == 0 ? input : $"{{\"step\":\"{stepDef.Key}\",\"processed\":true}}",
+                output: $"{{\"step\":\"{stepDef.Key}\",\"result\":\"ok\"}}"));
+            db.WorkflowEvents.Add(Event(inst, WorkflowEventTypes.StepCompleted, stepEnd));
+            elapsed += 15;
+        }
+
+        db.WorkflowInstances.Add(inst);
+        db.WorkflowEvents.Add(Event(inst, WorkflowEventTypes.WorkflowStarted, start));
+        db.WorkflowEvents.Add(Event(inst, WorkflowEventTypes.WorkflowCompleted, start.AddMinutes(1)));
+    }
+
+    private static void SeedFailedInstance(
+        StepTrailDbContext db,
+        ExecutableWorkflowDefinitionRecord def,
+        DateTimeOffset start,
+        string externalKey,
+        string input,
+        string error)
+    {
+        var inst = CreateInstance(def, start, externalKey, input, WorkflowInstanceStatus.Failed,
+            completedAt: start.AddMinutes(2));
+
+        var steps = def.StepDefinitions.ToList();
+
+        // First step completes
+        if (steps.Count > 0)
+        {
+            db.WorkflowStepExecutions.Add(CreateStepExecution(inst, steps[0],
+                WorkflowStepExecutionStatus.Completed, 1,
+                start.AddSeconds(5), start.AddSeconds(10),
+                input: input, output: $"{{\"step\":\"{steps[0].Key}\",\"result\":\"ok\"}}"));
+        }
+
+        // Second step fails after 3 attempts
+        if (steps.Count > 1)
+        {
+            for (var attempt = 1; attempt <= 3; attempt++)
+            {
+                var attemptStart = start.AddSeconds(15 + (attempt - 1) * 35);
+                db.WorkflowStepExecutions.Add(CreateStepExecution(inst, steps[1],
+                    WorkflowStepExecutionStatus.Failed, attempt,
+                    attemptStart, attemptStart.AddSeconds(5),
+                    input: $"{{\"step\":\"{steps[0].Key}\",\"result\":\"ok\"}}",
+                    error: error));
+            }
+        }
+
+        db.WorkflowInstances.Add(inst);
+        db.WorkflowEvents.Add(Event(inst, WorkflowEventTypes.WorkflowStarted, start));
+        db.WorkflowEvents.Add(Event(inst, WorkflowEventTypes.WorkflowFailed, start.AddMinutes(2)));
+    }
+
+    private static void SeedPendingInstance(
+        StepTrailDbContext db,
+        ExecutableWorkflowDefinitionRecord def,
+        DateTimeOffset start,
+        string externalKey,
+        string input)
+    {
+        var inst = CreateInstance(def, start, externalKey, input, WorkflowInstanceStatus.Pending);
+
+        var firstStep = def.StepDefinitions.OrderBy(s => s.Order).First();
+        db.WorkflowStepExecutions.Add(new WorkflowStepExecution
+        {
+            Id = Guid.NewGuid(),
+            WorkflowInstanceId = inst.Id,
+            ExecutableStepDefinitionId = firstStep.Id,
+            StepKey = firstStep.Key,
+            StepOrder = firstStep.Order,
+            StepType = firstStep.Type.ToString(),
+            Status = WorkflowStepExecutionStatus.Pending,
+            Attempt = 1,
+            Input = input,
+            ScheduledAt = start,
+            CreatedAt = start,
+            UpdatedAt = start
+        });
+
+        db.WorkflowInstances.Add(inst);
+        db.WorkflowEvents.Add(Event(inst, WorkflowEventTypes.WorkflowStarted, start));
+    }
+
+    private static void SeedRunningInstance(
+        StepTrailDbContext db,
+        ExecutableWorkflowDefinitionRecord def,
+        DateTimeOffset start,
+        string externalKey,
+        string input)
+    {
+        var inst = CreateInstance(def, start, externalKey, input, WorkflowInstanceStatus.Running);
+        var steps = def.StepDefinitions.OrderBy(s => s.Order).ToList();
+
+        // First step completed
+        if (steps.Count > 0)
+        {
+            db.WorkflowStepExecutions.Add(CreateStepExecution(inst, steps[0],
+                WorkflowStepExecutionStatus.Completed, 1,
+                start.AddSeconds(5), start.AddSeconds(10),
+                input: input, output: $"{{\"step\":\"{steps[0].Key}\",\"result\":\"ok\"}}"));
+        }
+
+        // Second step running
+        if (steps.Count > 1)
+        {
+            db.WorkflowStepExecutions.Add(new WorkflowStepExecution
+            {
+                Id = Guid.NewGuid(),
+                WorkflowInstanceId = inst.Id,
+                ExecutableStepDefinitionId = steps[1].Id,
+                StepKey = steps[1].Key,
+                StepOrder = steps[1].Order,
+                StepType = steps[1].Type.ToString(),
+                Status = WorkflowStepExecutionStatus.Running,
+                Attempt = 1,
+                Input = $"{{\"step\":\"{steps[0].Key}\",\"result\":\"ok\"}}",
+                ScheduledAt = start.AddSeconds(10),
+                StartedAt = start.AddSeconds(15),
+                LockedBy = "worker-dev-001",
+                LockedAt = start.AddSeconds(15),
+                CreatedAt = start.AddSeconds(10),
+                UpdatedAt = start.AddSeconds(15)
+            });
+        }
+
+        db.WorkflowInstances.Add(inst);
+        db.WorkflowEvents.Add(Event(inst, WorkflowEventTypes.WorkflowStarted, start));
+    }
+
+    private static void SeedPartialFailureInstance(
+        StepTrailDbContext db,
+        ExecutableWorkflowDefinitionRecord def,
+        DateTimeOffset start,
+        string externalKey,
+        string input,
+        string error)
+    {
+        // Chain workflow: steps 1,2 completed, step 3 completed, step 4 failed
+        var inst = CreateInstance(def, start, externalKey, input, WorkflowInstanceStatus.Failed,
+            completedAt: start.AddMinutes(3));
+        var steps = def.StepDefinitions.OrderBy(s => s.Order).ToList();
+
+        var elapsed = 0;
+        for (var i = 0; i < steps.Count; i++)
+        {
+            var stepStart = start.AddSeconds(elapsed + 5);
+            var stepEnd = start.AddSeconds(elapsed + 12);
+            var isLast = i == steps.Count - 1;
+
+            db.WorkflowStepExecutions.Add(CreateStepExecution(inst, steps[i],
+                isLast ? WorkflowStepExecutionStatus.Failed : WorkflowStepExecutionStatus.Completed,
+                1, stepStart, stepEnd,
+                input: i == 0 ? input : $"{{\"step\":\"{steps[i - 1].Key}\",\"result\":\"ok\"}}",
+                output: isLast ? null : $"{{\"step\":\"{steps[i].Key}\",\"result\":\"ok\"}}",
+                error: isLast ? error : null));
+            elapsed += 15;
+        }
+
+        db.WorkflowInstances.Add(inst);
+        db.WorkflowEvents.Add(Event(inst, WorkflowEventTypes.WorkflowStarted, start));
+        db.WorkflowEvents.Add(Event(inst, WorkflowEventTypes.WorkflowFailed, start.AddMinutes(3)));
+    }
+
+    // ── Factories ───────────────────────────────────────────────────────────────
+
+    private static WorkflowInstance CreateInstance(
+        ExecutableWorkflowDefinitionRecord def,
         DateTimeOffset createdAt,
+        string externalKey,
+        string input,
+        WorkflowInstanceStatus status,
         DateTimeOffset? completedAt = null) => new()
     {
         Id = Guid.NewGuid(),
         TenantId = TenantId,
-        WorkflowDefinitionId = def.Id,
+        ExecutableWorkflowDefinitionId = def.Id,
+        WorkflowDefinitionKey = def.Key,
+        WorkflowDefinitionVersion = def.Version,
         ExternalKey = externalKey,
         Status = status,
         Input = input,
@@ -310,46 +354,40 @@ public sealed class DevDataSeedService : IHostedService
         CompletedAt = completedAt
     };
 
-    private static WorkflowStepExecution StepExec(
+    private static WorkflowStepExecution CreateStepExecution(
         WorkflowInstance inst,
-        WorkflowDefinitionStep stepDef,
+        ExecutableStepDefinitionRecord stepDef,
         WorkflowStepExecutionStatus status,
         int attempt,
-        DateTimeOffset scheduledAt,
-        DateTimeOffset? startedAt = null,
-        DateTimeOffset? completedAt = null,
+        DateTimeOffset startedAt,
+        DateTimeOffset completedAt,
         string? input = null,
         string? output = null,
-        string? error = null,
-        string? lockedBy = null) => new()
+        string? error = null) => new()
     {
         Id = Guid.NewGuid(),
         WorkflowInstanceId = inst.Id,
-        WorkflowDefinitionStepId = stepDef.Id,
-        StepKey = stepDef.StepKey,
+        ExecutableStepDefinitionId = stepDef.Id,
+        StepKey = stepDef.Key,
+        StepOrder = stepDef.Order,
+        StepType = stepDef.Type.ToString(),
         Status = status,
         Attempt = attempt,
         Input = input,
         Output = output,
         Error = error,
-        ScheduledAt = scheduledAt,
-        LockedAt = lockedBy is not null ? startedAt : null,
-        LockedBy = lockedBy,
+        ScheduledAt = startedAt.AddSeconds(-5),
         StartedAt = startedAt,
         CompletedAt = completedAt,
-        CreatedAt = scheduledAt,
-        UpdatedAt = completedAt ?? startedAt ?? scheduledAt
+        CreatedAt = startedAt.AddSeconds(-5),
+        UpdatedAt = completedAt
     };
 
     private static WorkflowEvent Event(
-        WorkflowInstance inst,
-        WorkflowStepExecution? stepExec,
-        string eventType,
-        DateTimeOffset createdAt) => new()
+        WorkflowInstance inst, string eventType, DateTimeOffset createdAt) => new()
     {
         Id = Guid.NewGuid(),
         WorkflowInstanceId = inst.Id,
-        StepExecutionId = stepExec?.Id,
         EventType = eventType,
         CreatedAt = createdAt
     };
