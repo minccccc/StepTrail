@@ -451,7 +451,7 @@ ops.MapPost("/workflow-definitions/from-descriptor", async (
         return Results.BadRequest(new { error = "Name is required." });
     if (string.IsNullOrWhiteSpace(request.Key))
         return Results.BadRequest(new { error = "Key is required." });
-    if (!System.Text.RegularExpressions.Regex.IsMatch(request.Key.Trim(), @"^[a-z0-9][a-z0-9\-]*[a-z0-9]$"))
+    if (!IsValidWorkflowKey(request.Key.Trim()))
         return Results.BadRequest(new { error = "Key must contain only lowercase letters, numbers, and hyphens." });
     if (!Enum.TryParse<TriggerType>(request.TriggerType, ignoreCase: true, out var triggerType))
         return Results.BadRequest(new { error = $"Invalid trigger type '{request.TriggerType}'." });
@@ -463,14 +463,7 @@ ops.MapPost("/workflow-definitions/from-descriptor", async (
 
     var now = DateTimeOffset.UtcNow;
 
-    TriggerDefinition trigger = triggerType switch
-    {
-        TriggerType.Webhook => TriggerDefinition.CreateWebhook(Guid.NewGuid(), new WebhookTriggerConfiguration(request.Key.Trim())),
-        TriggerType.Manual => TriggerDefinition.CreateManual(Guid.NewGuid(), new ManualTriggerConfiguration("ops-console")),
-        TriggerType.Api => TriggerDefinition.CreateApi(Guid.NewGuid(), new ApiTriggerConfiguration(request.Key.Trim())),
-        TriggerType.Schedule => TriggerDefinition.CreateSchedule(Guid.NewGuid(), new ScheduleTriggerConfiguration(300)),
-        _ => throw new InvalidOperationException($"Unsupported trigger type.")
-    };
+    var trigger = CreateDefaultTrigger(triggerType, request.Key.Trim());
 
     var steps = descriptor.Steps
         .OrderBy(s => s.Order)
@@ -528,29 +521,14 @@ ops.MapPost("/workflow-definitions/blank", async (
         return Results.BadRequest(new { error = "Name is required." });
     if (string.IsNullOrWhiteSpace(request.Key))
         return Results.BadRequest(new { error = "Key is required." });
-    if (!System.Text.RegularExpressions.Regex.IsMatch(request.Key.Trim(), @"^[a-z0-9][a-z0-9\-]*[a-z0-9]$"))
+    if (!IsValidWorkflowKey(request.Key.Trim()))
         return Results.BadRequest(new { error = "Key must contain only lowercase letters, numbers, and hyphens, and must start and end with a letter or number." });
     if (!Enum.TryParse<TriggerType>(request.TriggerType, ignoreCase: true, out var triggerType))
         return Results.BadRequest(new { error = $"Invalid trigger type '{request.TriggerType}'. Supported: Webhook, Manual, Api, Schedule." });
 
     var now = DateTimeOffset.UtcNow;
 
-    TriggerDefinition trigger = triggerType switch
-    {
-        TriggerType.Webhook => TriggerDefinition.CreateWebhook(
-            Guid.NewGuid(),
-            new WebhookTriggerConfiguration(request.Key.Trim())),
-        TriggerType.Manual => TriggerDefinition.CreateManual(
-            Guid.NewGuid(),
-            new ManualTriggerConfiguration("ops-console")),
-        TriggerType.Api => TriggerDefinition.CreateApi(
-            Guid.NewGuid(),
-            new ApiTriggerConfiguration(request.Key.Trim())),
-        TriggerType.Schedule => TriggerDefinition.CreateSchedule(
-            Guid.NewGuid(),
-            new ScheduleTriggerConfiguration(300)),
-        _ => throw new InvalidOperationException($"Unsupported trigger type '{triggerType}'.")
-    };
+    var trigger = CreateDefaultTrigger(triggerType, request.Key.Trim());
 
     var definition = new StepTrail.Shared.Definitions.WorkflowDefinition(
         Guid.NewGuid(),
@@ -587,7 +565,7 @@ ops.MapPost("/workflow-definitions/clone", async (
         return Results.BadRequest(new { error = "Name is required." });
     if (string.IsNullOrWhiteSpace(request.Key))
         return Results.BadRequest(new { error = "Key is required." });
-    if (!System.Text.RegularExpressions.Regex.IsMatch(request.Key.Trim(), @"^[a-z0-9][a-z0-9\-]*[a-z0-9]$"))
+    if (!IsValidWorkflowKey(request.Key.Trim()))
         return Results.BadRequest(new { error = "Key must contain only lowercase letters, numbers, and hyphens, and must start and end with a letter or number." });
 
     var template = await repository.GetByIdAsync(request.TemplateId, ct);
@@ -670,14 +648,7 @@ ops.MapPut("/workflow-definitions/{id:guid}/trigger-type", async (
     if (definition.TriggerDefinition.Type == newTriggerType)
         return Results.Ok(new { id, triggerType = newTriggerType.ToString(), message = "Already set." });
 
-    TriggerDefinition newTrigger = newTriggerType switch
-    {
-        TriggerType.Webhook => TriggerDefinition.CreateWebhook(Guid.NewGuid(), new WebhookTriggerConfiguration(definition.Key)),
-        TriggerType.Manual => TriggerDefinition.CreateManual(Guid.NewGuid(), new ManualTriggerConfiguration("ops-console")),
-        TriggerType.Api => TriggerDefinition.CreateApi(Guid.NewGuid(), new ApiTriggerConfiguration(definition.Key)),
-        TriggerType.Schedule => TriggerDefinition.CreateSchedule(Guid.NewGuid(), new ScheduleTriggerConfiguration(300)),
-        _ => throw new InvalidOperationException($"Unsupported trigger type.")
-    };
+    var newTrigger = CreateDefaultTrigger(newTriggerType, definition.Key);
 
     var now = DateTimeOffset.UtcNow;
     var updated = new StepTrail.Shared.Definitions.WorkflowDefinition(
@@ -795,10 +766,8 @@ ops.MapPost("/workflow-definitions/{id:guid}/steps", async (
     if (definition.StepDefinitions.Any(s => s.Key == request.StepKey.Trim()))
         return Results.Conflict(new { error = $"Step key '{request.StepKey}' already exists." });
 
-    var supportedTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        { "HttpRequest", "SendWebhook", "Transform", "Conditional", "Delay" };
-    if (!supportedTypes.Contains(request.StepType))
-        return Results.BadRequest(new { error = $"Unsupported step type '{request.StepType}'. Supported: {string.Join(", ", supportedTypes)}." });
+    if (!IsSupportedStepType(request.StepType))
+        return Results.BadRequest(new { error = $"Unsupported step type '{request.StepType}'. Supported: HttpRequest, SendWebhook, Transform, Conditional, Delay." });
 
     var nextOrder = definition.StepDefinitions.Count > 0
         ? definition.StepDefinitions.Max(s => s.Order) + 1
@@ -1526,6 +1495,26 @@ static IEnumerable<TransformValueMapping> ParseMappings(string mappingsText)
 
     return mappings.Count > 0 ? mappings : [new TransformValueMapping("output", "{{input}}")];
 }
+
+static bool IsValidWorkflowKey(string key) =>
+    System.Text.RegularExpressions.Regex.IsMatch(key, @"^[a-z0-9][a-z0-9\-]*[a-z0-9]$");
+
+static bool IsSupportedStepType(string stepType) =>
+    stepType.Equals("HttpRequest", StringComparison.OrdinalIgnoreCase)
+    || stepType.Equals("SendWebhook", StringComparison.OrdinalIgnoreCase)
+    || stepType.Equals("Transform", StringComparison.OrdinalIgnoreCase)
+    || stepType.Equals("Conditional", StringComparison.OrdinalIgnoreCase)
+    || stepType.Equals("Delay", StringComparison.OrdinalIgnoreCase);
+
+static TriggerDefinition CreateDefaultTrigger(TriggerType triggerType, string workflowKey) =>
+    triggerType switch
+    {
+        TriggerType.Webhook => TriggerDefinition.CreateWebhook(Guid.NewGuid(), new WebhookTriggerConfiguration(workflowKey)),
+        TriggerType.Manual => TriggerDefinition.CreateManual(Guid.NewGuid(), new ManualTriggerConfiguration("ops-console")),
+        TriggerType.Api => TriggerDefinition.CreateApi(Guid.NewGuid(), new ApiTriggerConfiguration(workflowKey)),
+        TriggerType.Schedule => TriggerDefinition.CreateSchedule(Guid.NewGuid(), new ScheduleTriggerConfiguration(300)),
+        _ => throw new InvalidOperationException($"Unsupported trigger type '{triggerType}'.")
+    };
 
 static StepDefinition CreateDefaultStepDefinition(string stepKey, int order, string stepType)
 {
