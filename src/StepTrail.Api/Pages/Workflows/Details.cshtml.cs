@@ -15,6 +15,7 @@ public sealed class DetailsModel : PageModel
     public Guid Id { get; set; }
 
     public WorkflowInstanceDetail? Instance { get; private set; }
+    public WorkflowTrail? Trail { get; private set; }
     public string? LoadError { get; private set; }
 
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
@@ -25,7 +26,12 @@ public sealed class DetailsModel : PageModel
         Instance = await _api.GetInstanceAsync(Id, ct);
 
         if (Instance is null)
+        {
             LoadError = $"Workflow instance '{Id}' was not found.";
+            return Page();
+        }
+
+        Trail = await _api.GetTrailAsync(Id, ct);
 
         return Page();
     }

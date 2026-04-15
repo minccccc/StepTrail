@@ -23,6 +23,10 @@ public sealed class WorkflowApiClient
 
     public async Task<PagedResult<WorkflowInstanceSummary>> ListInstancesAsync(
         string? status = null,
+        string? workflowKey = null,
+        string? triggerType = null,
+        DateTimeOffset? createdFrom = null,
+        DateTimeOffset? createdTo = null,
         bool includeArchived = false,
         int page = 1,
         int pageSize = 100,
@@ -31,6 +35,14 @@ public sealed class WorkflowApiClient
         var url = $"/workflow-instances?page={page}&pageSize={pageSize}&includeArchived={includeArchived}";
         if (!string.IsNullOrWhiteSpace(status))
             url += $"&status={Uri.EscapeDataString(status)}";
+        if (!string.IsNullOrWhiteSpace(workflowKey))
+            url += $"&workflowKey={Uri.EscapeDataString(workflowKey)}";
+        if (!string.IsNullOrWhiteSpace(triggerType))
+            url += $"&triggerType={Uri.EscapeDataString(triggerType)}";
+        if (createdFrom.HasValue)
+            url += $"&createdFrom={Uri.EscapeDataString(createdFrom.Value.ToString("O"))}";
+        if (createdTo.HasValue)
+            url += $"&createdTo={Uri.EscapeDataString(createdTo.Value.ToString("O"))}";
 
         var result = await _http.GetFromJsonAsync<PagedResult<WorkflowInstanceSummary>>(url, ct);
         return result ?? new PagedResult<WorkflowInstanceSummary>();
@@ -43,12 +55,32 @@ public sealed class WorkflowApiClient
         return result ?? [];
     }
 
+    public async Task<IReadOnlyList<WorkflowDefinitionSummary>> ListDefinitionsAsync(
+        CancellationToken ct = default)
+    {
+        var result = await _http.GetFromJsonAsync<List<WorkflowDefinitionSummary>>("/workflow-definitions", ct);
+        return result ?? [];
+    }
+
     public async Task<WorkflowInstanceDetail?> GetInstanceAsync(Guid id, CancellationToken ct = default)
     {
         try
         {
             return await _http.GetFromJsonAsync<WorkflowInstanceDetail>(
                 $"/workflow-instances/{id}", ct);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    public async Task<WorkflowTrail?> GetTrailAsync(Guid id, CancellationToken ct = default)
+    {
+        try
+        {
+            return await _http.GetFromJsonAsync<WorkflowTrail>(
+                $"/workflow-instances/{id}/trail", ct);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {

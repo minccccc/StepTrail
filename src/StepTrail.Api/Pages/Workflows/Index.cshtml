@@ -13,29 +13,70 @@
 </div>
 
 @* Filters *@
-<form method="get" class="d-flex align-items-center gap-2 mb-4 flex-wrap">
-    <select name="statusFilter" class="form-select form-select-sm" style="width:180px">
-        <option value="">All statuses</option>
-        @foreach (var s in IndexModel.KnownStatuses)
+<form method="get" class="mb-4">
+    <div class="d-flex align-items-end gap-2 flex-wrap">
+        <div>
+            <label class="form-label small text-muted mb-1">Status</label>
+            <select name="statusFilter" class="form-select form-select-sm" style="width:160px">
+                <option value="">All statuses</option>
+                @foreach (var s in IndexModel.KnownStatuses)
+                {
+                    <option value="@s" selected="@(Model.StatusFilter == s)">@s</option>
+                }
+            </select>
+        </div>
+
+        <div>
+            <label class="form-label small text-muted mb-1">Workflow</label>
+            <select name="workflowKey" class="form-select form-select-sm" style="width:200px">
+                <option value="">All workflows</option>
+                @foreach (var key in Model.AvailableWorkflowKeys)
+                {
+                    <option value="@key" selected="@(Model.WorkflowKey == key)">@key</option>
+                }
+            </select>
+        </div>
+
+        <div>
+            <label class="form-label small text-muted mb-1">Trigger</label>
+            <select name="triggerType" class="form-select form-select-sm" style="width:130px">
+                <option value="">All triggers</option>
+                @foreach (var t in IndexModel.KnownTriggerTypes)
+                {
+                    <option value="@t" selected="@(Model.TriggerType == t)">@t</option>
+                }
+            </select>
+        </div>
+
+        <div>
+            <label class="form-label small text-muted mb-1">From</label>
+            <input type="date" name="createdFrom" class="form-control form-control-sm" style="width:150px"
+                   value="@Model.CreatedFrom" />
+        </div>
+
+        <div>
+            <label class="form-label small text-muted mb-1">To</label>
+            <input type="date" name="createdTo" class="form-control form-control-sm" style="width:150px"
+                   value="@Model.CreatedTo" />
+        </div>
+
+        <div class="form-check mb-0 ms-1 align-self-center" style="padding-top:1.25rem">
+            <input class="form-check-input" type="checkbox" name="showArchived" value="true"
+                   id="showArchivedCheck" checked="@Model.ShowArchived" />
+            <label class="form-check-label text-muted small" for="showArchivedCheck">Archived</label>
+        </div>
+
+        <div style="padding-top:1.25rem">
+            <button type="submit" class="btn btn-sm btn-outline-secondary">Apply</button>
+        </div>
+
+        @if (Model.HasActiveFilters)
         {
-            <option value="@s" selected="@(Model.StatusFilter == s)">@s</option>
+            <div style="padding-top:1.25rem">
+                <a href="/ops/workflows" class="btn btn-sm btn-link text-secondary">Clear</a>
+            </div>
         }
-    </select>
-
-    <div class="form-check mb-0 ms-1">
-        <input class="form-check-input" type="checkbox" name="showArchived" value="true"
-               id="showArchivedCheck" checked="@Model.ShowArchived" />
-        <label class="form-check-label text-muted small" for="showArchivedCheck">
-            Show archived
-        </label>
     </div>
-
-    <button type="submit" class="btn btn-sm btn-outline-secondary">Apply</button>
-
-    @if (!string.IsNullOrWhiteSpace(Model.StatusFilter) || Model.ShowArchived)
-    {
-        <a href="/ops/workflows" class="btn btn-sm btn-link text-secondary">Clear</a>
-    }
 </form>
 
 @if (Model.ErrorMessage is not null)
@@ -48,7 +89,7 @@ else if (!Model.Result.Items.Any())
         No workflow instances found.
         @if (!Model.ShowArchived)
         {
-            <span>Archived instances are hidden — use <strong>Show archived</strong> to include them.</span>
+            <span>Archived instances are hidden — enable the <strong>Archived</strong> checkbox to include them.</span>
         }
     </div>
 }
@@ -60,6 +101,7 @@ else
                 <tr>
                     <th>Instance ID</th>
                     <th>Workflow</th>
+                    <th>Trigger</th>
                     <th>External Key</th>
                     <th>Status</th>
                     <th>Current Step</th>
@@ -72,13 +114,14 @@ else
                     <tr class="@(item.Status == "Archived" ? "text-muted" : "")">
                         <td class="font-monospace small">
                             <a href="/ops/workflows/details?id=@item.Id" class="text-decoration-none">
-                                @item.Id.ToString()
+                                @item.Id.ToString()[..8]…
                             </a>
                         </td>
                         <td>
                             @item.WorkflowKey
                             <span class="badge bg-light text-dark border ms-1">v@item.WorkflowVersion</span>
                         </td>
+                        <td>@Html.Raw(TriggerBadge(item.TriggerType))</td>
                         <td class="text-muted small">@(item.ExternalKey ?? "—")</td>
                         <td>@Html.Raw(StatusBadge(item.Status))</td>
                         <td class="text-muted small">@(item.CurrentStep ?? "—")</td>
@@ -88,9 +131,49 @@ else
             </tbody>
         </table>
     </div>
+
+    @* Pagination *@
+    @if (Model.Result.Total > Model.Result.PageSize)
+    {
+        var totalPages = (int)Math.Ceiling((double)Model.Result.Total / Model.Result.PageSize);
+        var currentPage = Model.Result.Page;
+
+        <nav class="mt-3">
+            <ul class="pagination pagination-sm justify-content-center">
+                @for (var p = 1; p <= totalPages && p <= 10; p++)
+                {
+                    <li class="page-item @(p == currentPage ? "active" : "")">
+                        <a class="page-link" href="@PageUrl(p)">@p</a>
+                    </li>
+                }
+                @if (totalPages > 10)
+                {
+                    <li class="page-item disabled"><span class="page-link">…</span></li>
+                }
+            </ul>
+        </nav>
+    }
 }
 
 @functions {
+    string PageUrl(int page)
+    {
+        var qs = new List<string> { $"page={page}" };
+        if (!string.IsNullOrWhiteSpace(Model.StatusFilter))
+            qs.Add($"statusFilter={Uri.EscapeDataString(Model.StatusFilter)}");
+        if (!string.IsNullOrWhiteSpace(Model.WorkflowKey))
+            qs.Add($"workflowKey={Uri.EscapeDataString(Model.WorkflowKey)}");
+        if (!string.IsNullOrWhiteSpace(Model.TriggerType))
+            qs.Add($"triggerType={Uri.EscapeDataString(Model.TriggerType)}");
+        if (!string.IsNullOrWhiteSpace(Model.CreatedFrom))
+            qs.Add($"createdFrom={Uri.EscapeDataString(Model.CreatedFrom)}");
+        if (!string.IsNullOrWhiteSpace(Model.CreatedTo))
+            qs.Add($"createdTo={Uri.EscapeDataString(Model.CreatedTo)}");
+        if (Model.ShowArchived)
+            qs.Add("showArchived=true");
+        return $"/ops/workflows?{string.Join("&", qs)}";
+    }
+
     static string StatusBadge(string status) => status switch
     {
         "Pending"       => "<span class=\"badge bg-secondary\">Pending</span>",
@@ -101,5 +184,15 @@ else
         "Cancelled"     => "<span class=\"badge bg-warning text-dark\">Cancelled</span>",
         "Archived"      => "<span class=\"badge bg-light text-secondary border\">Archived</span>",
         _               => $"<span class=\"badge bg-light text-dark\">{status}</span>"
+    };
+
+    static string TriggerBadge(string? triggerType) => triggerType switch
+    {
+        "Webhook"  => "<span class=\"badge bg-info text-dark\">Webhook</span>",
+        "Manual"   => "<span class=\"badge bg-secondary\">Manual</span>",
+        "Api"      => "<span class=\"badge bg-primary\">API</span>",
+        "Schedule" => "<span class=\"badge bg-warning text-dark\">Schedule</span>",
+        null       => "<span class=\"text-muted small\">—</span>",
+        _          => $"<span class=\"badge bg-light text-dark\">{triggerType}</span>"
     };
 }

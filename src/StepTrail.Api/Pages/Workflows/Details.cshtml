@@ -3,6 +3,7 @@
 @{
     ViewData["Title"] = Model.Instance is null ? "Instance Not Found" : $"Instance {Model.Id.ToString()[..8]}…";
     var inst = Model.Instance;
+    var trail = Model.Trail;
     bool isArchived  = inst?.Status == "Archived";
     bool canRetry    = inst?.CanRetry ?? false;
     bool canReplay   = inst?.CanReplay ?? false;
@@ -39,6 +40,7 @@
 }
 else if (inst is not null)
 {
+    @* ── Header with status + actions ── *@
     <div class="d-flex align-items-center justify-content-between mb-4">
         <div>
             <h1 class="h3 mb-1">
@@ -49,7 +51,6 @@ else if (inst is not null)
             <p class="text-muted mb-0 font-monospace small">@inst.Id</p>
         </div>
 
-        @* Action buttons *@
         <div class="d-flex gap-2">
             @if (canRetry)
             {
@@ -87,8 +88,7 @@ else if (inst is not null)
     </div>
 
     <div class="row g-3 mb-4">
-
-        @* General information *@
+        @* ── General information ── *@
         <div class="col-md-6">
             <div class="card h-100 shadow-sm">
                 <div class="card-header fw-semibold">General Information</div>
@@ -96,6 +96,9 @@ else if (inst is not null)
                     <dl class="row mb-0 small">
                         <dt class="col-sm-4 text-muted">Instance ID</dt>
                         <dd class="col-sm-8 font-monospace">@inst.Id</dd>
+
+                        <dt class="col-sm-4 text-muted">Trigger Type</dt>
+                        <dd class="col-sm-8">@Html.Raw(TriggerBadge(inst.TriggerType))</dd>
 
                         <dt class="col-sm-4 text-muted">External Key</dt>
                         <dd class="col-sm-8">@(inst.ExternalKey ?? "—")</dd>
@@ -119,12 +122,12 @@ else if (inst is not null)
             </div>
         </div>
 
-        @* Input / output + error *@
+        @* ── Input / Trigger Data ── *@
         <div class="col-md-6">
             <div class="card h-100 shadow-sm">
-                <div class="card-header fw-semibold">Input / Output</div>
+                <div class="card-header fw-semibold">Input / Trigger Data</div>
                 <div class="card-body">
-                    <p class="text-muted small mb-1 fw-semibold">Input</p>
+                    <p class="text-muted small mb-1 fw-semibold">Mapped Input</p>
                     @if (string.IsNullOrWhiteSpace(inst.Input))
                     {
                         <p class="text-muted small fst-italic">No input.</p>
@@ -136,123 +139,200 @@ else if (inst is not null)
 
                     @if (!string.IsNullOrWhiteSpace(inst.TriggerData))
                     {
-                        <p class="text-muted small mb-1 fw-semibold mt-3">Trigger Data</p>
+                        <p class="text-muted small mb-1 fw-semibold mt-3">Raw Trigger Data</p>
                         <pre class="json-block">@inst.TriggerData</pre>
-                    }
-
-                    @{
-                        var lastOutput = inst.StepExecutions
-                            .Where(s => s.Status == "Completed" && s.Output is not null)
-                            .OrderByDescending(s => s.CompletedAt)
-                            .Select(s => s.Output)
-                            .FirstOrDefault();
-
-                        var errorStep = inst.StepExecutions
-                            .Where(s => s.Status == "Failed" && s.Error is not null)
-                            .OrderByDescending(s => s.CompletedAt)
-                            .FirstOrDefault();
-                    }
-
-                    <p class="text-muted small mb-1 fw-semibold mt-3">Last Output</p>
-                    @if (string.IsNullOrWhiteSpace(lastOutput))
-                    {
-                        <p class="text-muted small fst-italic">No output yet.</p>
-                    }
-                    else
-                    {
-                        <pre class="json-block">@lastOutput</pre>
-                    }
-
-                    @if (errorStep is not null)
-                    {
-                        <div class="alert alert-danger small mt-3 mb-0 py-2">
-                            <strong>Error in step "@errorStep.StepKey" (attempt @errorStep.Attempt):</strong><br />
-                            @errorStep.Error
-                        </div>
                     }
                 </div>
             </div>
         </div>
     </div>
 
-    @* Step execution timeline *@
+    @* ── Replay events (if any) ── *@
+    @if (trail?.ReplayEvents.Count > 0)
+    {
+        <div class="alert alert-info small mb-4">
+            @foreach (var replay in trail.ReplayEvents)
+            {
+                <div>
+                    <strong>Replayed</strong> at @replay.OccurredAt.ToString("yyyy-MM-dd HH:mm:ss zzz")
+                    @if (!string.IsNullOrWhiteSpace(replay.Payload))
+                    {
+                        <span class="text-muted ms-2">@Truncate(replay.Payload, 120)</span>
+                    }
+                </div>
+            }
+        </div>
+    }
+
+    @* ── Step Trail ── *@
     <div class="card shadow-sm">
-        <div class="card-header fw-semibold">Step Execution Timeline</div>
+        <div class="card-header fw-semibold">Step Trail</div>
         <div class="card-body p-0">
-            @if (!inst.StepExecutions.Any())
+            @if (trail is null || trail.Steps.Count == 0)
             {
                 <p class="text-muted p-3 mb-0">No step executions recorded yet.</p>
             }
             else
             {
-                <div class="table-responsive">
-                    <table class="table table-sm align-middle mb-0">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Step</th>
-                                <th>Type</th>
-                                <th>Status</th>
-                                <th>Classification</th>
-                                <th>Attempt</th>
-                                <th>Scheduled At</th>
-                                <th>Started At</th>
-                                <th>Completed At</th>
-                                <th>Error</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var step in inst.StepExecutions)
+                @foreach (var step in trail.Steps)
+                {
+                    var stepBorderClass = step.LatestStatus switch
+                    {
+                        "Completed" => "border-success",
+                        "Failed"    => "border-danger",
+                        "Running"   => "border-primary",
+                        "Waiting"   => "border-info",
+                        "Pending"   => "border-secondary",
+                        _           => ""
+                    };
+
+                    <div class="border-start border-3 @stepBorderClass mx-3 my-3 ps-3">
+                        @* Step header *@
+                        <div class="d-flex align-items-center gap-2 mb-1">
+                            <span class="fw-semibold">@step.StepKey</span>
+                            <span class="text-muted small">@(step.StepType ?? "")</span>
+                            @Html.Raw(StepStatusBadge(step.LatestStatus))
+                            @if (!string.IsNullOrWhiteSpace(step.LatestFailureClassification))
                             {
-                                var rowClass = step.Status switch
-                                {
-                                    "NotStarted" => "table-light",
-                                    "Pending"   => "",
-                                    "Waiting"   => "table-info",
-                                    "Completed" => "table-success",
-                                    "Failed"    => "table-danger",
-                                    "Running"   => "table-primary",
-                                    "Cancelled" => "table-warning",
-                                    _           => ""
-                                };
-                                <tr class="@rowClass">
-                                    <td class="fw-semibold small">@step.StepKey</td>
-                                    <td class="text-muted small">@(step.StepType ?? "—")</td>
-                                    <td>@Html.Raw(StepStatusBadge(step.Status))</td>
-                                    <td class="small">
-                                        @if (!string.IsNullOrWhiteSpace(step.FailureClassification))
-                                        {
-                                            @Html.Raw(ClassificationBadge(step.FailureClassification))
-                                        }
-                                        else
-                                        {
-                                            <span class="text-muted">—</span>
-                                        }
-                                    </td>
-                                    <td class="text-center">@step.Attempt</td>
-                                    <td class="text-muted small">@step.ScheduledAt.ToString("HH:mm:ss")</td>
-                                    <td class="text-muted small">@(step.StartedAt?.ToString("HH:mm:ss") ?? "—")</td>
-                                    <td class="text-muted small">@(step.CompletedAt?.ToString("HH:mm:ss") ?? "—")</td>
-                                    <td class="text-danger small">
-                                        @if (!string.IsNullOrWhiteSpace(step.Error))
-                                        {
-                                            <span title="@step.Error">@TruncateError(step.Error, 80)</span>
-                                        }
-                                        else
-                                        {
-                                            <span class="text-muted">—</span>
-                                        }
-                                    </td>
-                                </tr>
+                                @Html.Raw(ClassificationBadge(step.LatestFailureClassification))
                             }
-                        </tbody>
-                    </table>
-                </div>
+                            @if (step.Attempts.Count > 1)
+                            {
+                                <span class="badge bg-light text-dark border">@step.Attempts.Count attempts</span>
+                            }
+                        </div>
+
+                        @* Step timing *@
+                        @{
+                            var latestAttempt = step.Attempts.Count > 0 ? step.Attempts[^1] : null;
+                        }
+                        @if (latestAttempt is not null &&
+                             (latestAttempt.StartedAt.HasValue || latestAttempt.CompletedAt.HasValue))
+                        {
+                            <div class="text-muted small mb-1">
+                                @if (latestAttempt.StartedAt.HasValue)
+                                {
+                                    <span>Started @latestAttempt.StartedAt.Value.ToString("HH:mm:ss")</span>
+                                }
+                                @if (latestAttempt.CompletedAt.HasValue)
+                                {
+                                    <span class="ms-2">Completed @latestAttempt.CompletedAt.Value.ToString("HH:mm:ss")</span>
+                                    @if (latestAttempt.StartedAt.HasValue)
+                                    {
+                                        var duration = latestAttempt.CompletedAt.Value - latestAttempt.StartedAt.Value;
+                                        <span class="ms-1">(@FormatDuration(duration))</span>
+                                    }
+                                }
+                            </div>
+                        }
+
+                        @* Waiting metadata (PBI-0805) *@
+                        @if (step.WaitingUntil.HasValue)
+                        {
+                            <div class="alert alert-info small py-1 px-2 mb-2 d-inline-block">
+                                Waiting until @step.WaitingUntil.Value.ToString("yyyy-MM-dd HH:mm:ss zzz")
+                            </div>
+                        }
+                        @if (step.NextRetryAt.HasValue)
+                        {
+                            <div class="alert alert-warning small py-1 px-2 mb-2 d-inline-block">
+                                Retry scheduled at @step.NextRetryAt.Value.ToString("yyyy-MM-dd HH:mm:ss zzz")
+                            </div>
+                        }
+
+                        @* Error summary *@
+                        @if (!string.IsNullOrWhiteSpace(step.LatestError))
+                        {
+                            <div class="alert alert-danger small py-1 px-2 mb-2">
+                                @step.LatestError
+                            </div>
+                        }
+
+                        @* Output (collapsed for large payloads) *@
+                        @if (!string.IsNullOrWhiteSpace(step.LatestOutput))
+                        {
+                            <details class="mb-2">
+                                <summary class="text-muted small" style="cursor:pointer">Output</summary>
+                                <pre class="json-block mt-1">@step.LatestOutput</pre>
+                            </details>
+                        }
+
+                        @* Attempt history (collapsed if more than 1 attempt) *@
+                        @if (step.Attempts.Count > 1)
+                        {
+                            <details class="mb-1">
+                                <summary class="text-muted small" style="cursor:pointer">Attempt history</summary>
+                                <table class="table table-sm small mt-1 mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>#</th>
+                                            <th>Status</th>
+                                            <th>Classification</th>
+                                            <th>Scheduled</th>
+                                            <th>Started</th>
+                                            <th>Completed</th>
+                                            <th>Error</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var attempt in step.Attempts)
+                                        {
+                                            var rowClass = attempt.Status switch
+                                            {
+                                                "Completed" => "table-success",
+                                                "Failed"    => "table-danger",
+                                                "Running"   => "table-primary",
+                                                "Waiting"   => "table-info",
+                                                "Pending"   => "",
+                                                _           => "table-light"
+                                            };
+                                            <tr class="@rowClass">
+                                                <td>@attempt.Attempt</td>
+                                                <td>@Html.Raw(StepStatusBadge(attempt.Status))</td>
+                                                <td>
+                                                    @if (!string.IsNullOrWhiteSpace(attempt.FailureClassification))
+                                                    {
+                                                        @Html.Raw(ClassificationBadge(attempt.FailureClassification))
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="text-muted">—</span>
+                                                    }
+                                                </td>
+                                                <td class="text-muted">@attempt.ScheduledAt.ToString("HH:mm:ss")</td>
+                                                <td class="text-muted">@(attempt.StartedAt?.ToString("HH:mm:ss") ?? "—")</td>
+                                                <td class="text-muted">@(attempt.CompletedAt?.ToString("HH:mm:ss") ?? "—")</td>
+                                                <td class="text-danger">
+                                                    @if (!string.IsNullOrWhiteSpace(attempt.Error))
+                                                    {
+                                                        <span title="@attempt.Error">@Truncate(attempt.Error, 60)</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="text-muted">—</span>
+                                                    }
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </details>
+                        }
+                    </div>
+                }
             }
         </div>
     </div>
+
+    @* ── Workflow-level waiting indicator (PBI-0805) ── *@
+    @if (inst.Status == "AwaitingRetry")
+    {
+        <div class="alert alert-warning mt-3 small">
+            This workflow is waiting for a retry to be picked up by a worker.
+        </div>
+    }
 }
 
-@* Bootstrap JS for dismissible alerts *@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
         integrity="sha384-YvpcrYf0tY3lHB60NNkmXc4s9bIOgUxi8T/jzmK0xNnfkEbw9tGJKh7AqFHQS"
         crossorigin="anonymous"></script>
@@ -284,13 +364,30 @@ else if (inst is not null)
 
     static string ClassificationBadge(string classification) => classification switch
     {
-        "TransientFailure"      => "<span class=\"badge bg-warning text-dark\">Transient</span>",
-        "PermanentFailure"      => "<span class=\"badge bg-danger\">Permanent</span>",
-        "InvalidConfiguration"  => "<span class=\"badge bg-dark\">Invalid Config</span>",
-        "InputResolutionFailure"=> "<span class=\"badge bg-dark\">Input Resolution</span>",
-        _                       => $"<span class=\"badge bg-light text-dark\">{classification}</span>"
+        "TransientFailure"       => "<span class=\"badge bg-warning text-dark\">Transient</span>",
+        "PermanentFailure"       => "<span class=\"badge bg-danger\">Permanent</span>",
+        "InvalidConfiguration"   => "<span class=\"badge bg-dark\">Invalid Config</span>",
+        "InputResolutionFailure" => "<span class=\"badge bg-dark\">Input Resolution</span>",
+        _                        => $"<span class=\"badge bg-light text-dark\">{classification}</span>"
     };
 
-    static string TruncateError(string error, int max) =>
-        error.Length <= max ? error : error[..max] + "…";
+    static string TriggerBadge(string? triggerType) => triggerType switch
+    {
+        "Webhook"  => "<span class=\"badge bg-info text-dark\">Webhook</span>",
+        "Manual"   => "<span class=\"badge bg-secondary\">Manual</span>",
+        "Api"      => "<span class=\"badge bg-primary\">API</span>",
+        "Schedule" => "<span class=\"badge bg-warning text-dark\">Schedule</span>",
+        null       => "<span class=\"text-muted\">—</span>",
+        _          => $"<span class=\"badge bg-light text-dark\">{triggerType}</span>"
+    };
+
+    static string Truncate(string text, int max) =>
+        text.Length <= max ? text : text[..max] + "…";
+
+    static string FormatDuration(TimeSpan duration)
+    {
+        if (duration.TotalSeconds < 1) return $"{duration.TotalMilliseconds:F0}ms";
+        if (duration.TotalMinutes < 1) return $"{duration.TotalSeconds:F1}s";
+        return $"{duration.TotalMinutes:F1}m";
+    }
 }

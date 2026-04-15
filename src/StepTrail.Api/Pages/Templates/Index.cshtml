@@ -1,41 +1,90 @@
-@page "/ops/templates"
+@page "/ops/definitions"
 @model StepTrail.Api.Pages.Templates.IndexModel
 @{
-    ViewData["Title"] = "Workflow Templates";
+    ViewData["Title"] = "Workflow Definitions";
 }
 
-<div class="d-flex align-items-center justify-content-between mb-4">
-    <h1 class="h3 mb-0">Workflow Templates</h1>
-    <span class="text-muted small">Pre-built workflows ready to configure and run</span>
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <h1 class="h3 mb-0">Workflow Definitions</h1>
+    <span class="text-muted small">@Model.Definitions.Count definition(s)</span>
 </div>
 
-<div class="row g-4">
-    <div class="col-md-6 col-lg-4">
-        <div class="card shadow-sm h-100">
-            <div class="card-body d-flex flex-column">
-                <div class="d-flex align-items-center gap-2 mb-2">
-                    <span class="badge bg-secondary">HTTP</span>
-                    <span class="badge bg-light text-dark border">Webhook trigger</span>
-                </div>
-                <h5 class="card-title mb-1">Webhook → HTTP Call</h5>
-                <p class="card-text text-muted small flex-grow-1">
-                    Receives an external webhook and forwards the payload to a configurable
-                    HTTP endpoint. Retries up to 3 times on failure before alerting.
-                </p>
-                <div class="d-flex align-items-center gap-2 mt-3 small text-muted border-top pt-3">
-                    <span>Webhook trigger</span>
-                    <span>→</span>
-                    <span>HTTP call</span>
-                    <span>→</span>
-                    <span>Retry (×3)</span>
-                    <span>→</span>
-                    <span>Complete</span>
-                </div>
-                <a href="/ops/templates/setup?template=webhook-to-http-call"
-                   class="btn btn-primary btn-sm mt-3">
-                    Set up &amp; Run
-                </a>
-            </div>
-        </div>
+@if (Model.ErrorMessage is not null)
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+else if (!Model.Definitions.Any())
+{
+    <div class="alert alert-secondary">
+        No workflow definitions found. Create one programmatically or via the definition sync service.
     </div>
-</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-hover table-sm align-middle bg-white shadow-sm rounded">
+            <thead class="table-light">
+                <tr>
+                    <th>Name</th>
+                    <th>Key</th>
+                    <th>Trigger</th>
+                    <th>Status</th>
+                    <th>Version</th>
+                    <th>Steps</th>
+                    <th>Updated</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var def in Model.Definitions)
+                {
+                    <tr>
+                        <td class="fw-semibold">
+                            @def.Name
+                            @if (!string.IsNullOrWhiteSpace(def.Description))
+                            {
+                                <br /><span class="text-muted small">@Truncate(def.Description, 80)</span>
+                            }
+                        </td>
+                        <td class="font-monospace small">@def.Key</td>
+                        <td>@Html.Raw(TriggerBadge(def.TriggerType))</td>
+                        <td>@Html.Raw(StatusBadge(def.Status))</td>
+                        <td class="text-center">
+                            <span class="badge bg-light text-dark border">v@def.Version</span>
+                        </td>
+                        <td class="text-center text-muted">@def.StepCount</td>
+                        <td class="text-muted small">@def.UpdatedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>
+                            <a href="/ops/workflows?workflowKey=@Uri.EscapeDataString(def.Key)"
+                               class="btn btn-sm btn-outline-primary">
+                                View Instances
+                            </a>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@functions {
+    static string StatusBadge(string status) => status switch
+    {
+        "Active"   => "<span class=\"badge bg-success\">Active</span>",
+        "Inactive" => "<span class=\"badge bg-secondary\">Inactive</span>",
+        "Draft"    => "<span class=\"badge bg-light text-dark border\">Draft</span>",
+        _          => $"<span class=\"badge bg-light text-dark\">{status}</span>"
+    };
+
+    static string TriggerBadge(string? triggerType) => triggerType switch
+    {
+        "Webhook"  => "<span class=\"badge bg-info text-dark\">Webhook</span>",
+        "Manual"   => "<span class=\"badge bg-secondary\">Manual</span>",
+        "Api"      => "<span class=\"badge bg-primary\">API</span>",
+        "Schedule" => "<span class=\"badge bg-warning text-dark\">Schedule</span>",
+        _          => "<span class=\"badge bg-light text-dark border\">Unknown</span>"
+    };
+
+    static string Truncate(string text, int max) =>
+        text.Length <= max ? text : text[..max] + "...";
+}

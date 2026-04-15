@@ -391,6 +391,35 @@ ops.MapGet("/workflows", (IWorkflowRegistry registry) =>
     return Results.Ok(workflows);
 });
 
+ops.MapGet("/workflow-definitions", async (
+    StepTrailDbContext db,
+    CancellationToken ct) =>
+{
+    var definitions = await db.ExecutableWorkflowDefinitions
+        .Include(d => d.TriggerDefinition)
+        .Include(d => d.StepDefinitions)
+        .AsNoTracking()
+        .OrderBy(d => d.Key)
+        .ThenByDescending(d => d.Version)
+        .ToListAsync(ct);
+
+    var result = definitions.Select(d => new WorkflowDefinitionSummary
+    {
+        Id = d.Id,
+        Key = d.Key,
+        Name = d.Name,
+        Version = d.Version,
+        Status = d.Status.ToString(),
+        TriggerType = d.TriggerDefinition?.Type.ToString(),
+        Description = d.Description,
+        StepCount = d.StepDefinitions.Count,
+        CreatedAtUtc = d.CreatedAtUtc,
+        UpdatedAtUtc = d.UpdatedAtUtc
+    });
+
+    return Results.Ok(result);
+});
+
 ops.MapPost("/manual-triggers/start", async (
     StartManualWorkflowRequest request,
     ClaimsPrincipal user,
