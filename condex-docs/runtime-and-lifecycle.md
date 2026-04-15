@@ -4,7 +4,7 @@ This document explains how a workflow moves through the current StepTrail system
 
 ## 1. Workflow Registration
 
-Workflows are defined in code by inheriting from `WorkflowDescriptor`.
+Templates are defined in code by inheriting from `WorkflowDescriptor`.
 
 Each descriptor declares:
 
@@ -29,62 +29,72 @@ At API startup:
 
 - workflow descriptors are registered into DI
 - `IWorkflowRegistry` exposes them in memory
-- `WorkflowDefinitionSyncService` persists them into:
-  - `workflow_definitions`
-  - `workflow_definition_steps`
+- `WorkflowDefinitionSyncService` syncs template metadata into the database
 - if a descriptor declares `RecurrenceIntervalSeconds`, the API also creates a `recurring_workflow_schedules` row for that definition the first time it is synced
 
-This creates a bridge between code-first authoring and database-driven runtime execution.
+Those descriptors back the Templates catalog. Operators then create persisted workflow definitions from templates or manually through the authoring UI.
+
+Workflows can also be authored entirely through the ops UI:
+
+- Users create `ExecutableWorkflowDefinition` records via the ops console
+- These records go through a status lifecycle: `Inactive` to `Active`
+- Active definitions are available for triggering alongside code-first descriptors
 
 ## 2. Triggering A Workflow
 
-There are currently two ways to start a workflow instance.
+There are four trigger types that can start a workflow instance.
 
-### Protected operator start
-
-Endpoint:
-
-- `POST /workflow-instances`
-
-This is part of the authenticated ops API.
-
-The request accepts:
-
-- workflow key
-- optional version
-- tenant id
-- optional external key
-- optional idempotency key
-- optional input payload
-
-### Public webhook start
+### Webhook
 
 Endpoint:
 
-- `POST /webhooks/{workflowKey}`
+- `POST /webhooks/{routeKey}` (also accepts `PUT`)
 
 This endpoint is intentionally unauthenticated.
 
 It uses:
 
-- `X-Idempotency-Key` header
 - `X-External-Key` header
 - optional `tenantId` query parameter
-- JSON request body as workflow input
+- JSON request body as webhook payload
 
 If `tenantId` is omitted, the default seeded tenant is used.
 
 Important current behavior:
 
-- if the body is malformed JSON, the request still proceeds and the workflow is started with `null` input
+- the body must be valid JSON
+- webhook route resolution is based on the configured route key, not the workflow key
+- configured signature validation is applied before instance creation
+- input mapping transforms the raw webhook payload into the shape expected by the workflow
+- idempotency extraction prevents duplicate instances from repeated deliveries of the same event
+
+### Manual
+
+Endpoint:
+
+- `POST /manual-triggers/start`
+
+This path starts an executable workflow definition through its Manual trigger configuration from the ops console.
+
+### Api
+
+Endpoint:
+
+- `POST /api-triggers/{workflowKey}`
+
+This path starts an executable workflow definition through its Api trigger configuration.
+
+### Schedule
+
+Recurring workflows are triggered automatically via an interval (in seconds) or a cron expression configured on the workflow definition. The worker dispatches these on each loop iteration when the next run time is due.
 
 ## 3. Creating The Instance And First Step
 
-Both trigger paths delegate to the same `WorkflowInstanceService`.
+Trigger-specific services ultimately delegate into the shared workflow start path.
 
 The service:
 
-1. resolves the workflow descriptor
+1. resolves the target workflow definition
 2. verifies the tenant exists
 3. checks idempotency if an idempotency key was supplied
 4. loads the persisted workflow definition and first step
@@ -112,7 +122,7 @@ Claiming is handled by `StepExecutionClaimer`.
 
 The claim query:
 
-- filters `Pending` executions
+- filters `Pending` and `AwaitingRetry` executions
 - filters rows where `scheduled_at <= now`
 - orders by oldest due work
 - uses `FOR UPDATE SKIP LOCKED`
@@ -137,23 +147,19 @@ The processor:
 
 1. loads the step definition
 2. writes a `StepStarted` event
-3. resolves the handler using keyed DI and the step's `StepType`
-4. builds a `StepContext` containing:
-   - workflow instance id
-   - step execution id
-   - step key
-   - execution input
-   - step config JSON
+3. resolves the executor using the step-type registry
+4. builds a structured step execution request containing workflow, step, config, and state context
 5. applies an optional timeout token when `TimeoutSeconds` is configured
 6. starts `StepLeaseRenewer` so `lock_expires_at` keeps moving forward while the handler is running
 7. persists either success or failure
 
-Current built-in handlers are:
+Current built-in executable step types are:
 
-- `SendWelcomeEmailHandler`
-- `ProvisionAccountHandler`
-- `NotifyTeamHandler`
-- `HttpActivityHandler`
+- `HttpRequest`
+- `SendWebhook`
+- `Transform`
+- `Conditional`
+- `Delay`
 
 ## 7. Success Path
 
@@ -193,23 +199,43 @@ If the handler throws:
 - the current execution is marked `Failed`
 - the error message is stored
 - a failure event is written:
-  - `StepFailed` for normal exceptions
+  - `StepFailed` for normal exceptions (payload includes the failure classification)
   - `StepTimedOut` when the timeout token cancels the handler
 
-Then the worker compares:
+### Failure classification
 
-- current `Attempt`
-- step definition `MaxAttempts`
+Every failure is classified into one of four categories:
+
+- `TransientFailure` -- temporary problems such as network errors or upstream 5xx responses
+- `PermanentFailure` -- errors that will not resolve on their own, such as a 404 or business-rule violation
+- `InvalidConfiguration` -- the step definition itself is misconfigured (e.g. missing URL, bad template)
+- `InputResolutionFailure` -- the input to the step could not be resolved from the prior step output or workflow context
+
+`PermanentFailure` and `InvalidConfiguration` skip retries regardless of how many attempts remain.
+
+### Retry policy
+
+Retry behavior is controlled by a `RetryPolicy` model that replaces the earlier flat `MaxAttempts` / `RetryDelaySeconds` fields:
+
+- `MaxAttempts` -- total number of attempts before giving up
+- `InitialDelaySeconds` -- delay before the first retry
+- `BackoffStrategy` -- `Fixed` (constant delay) or `Exponential` (doubles each attempt, capped at `MaxDelaySeconds`)
+- `MaxDelaySeconds` -- upper bound on computed delay when using exponential backoff
+- `RetryOnTimeout` -- whether a timeout counts as a retryable failure
+
+The resolved retry policy is snapshotted as `RetryPolicyJson` on each execution row so that later policy changes do not affect in-flight work.
 
 ### If retries remain
 
-A new pending execution row is inserted for the same step with:
+A new execution row is inserted for the same step with:
 
 - `Attempt = previous attempt + 1`
 - `Input = previous execution input`
-- `ScheduledAt = now + RetryDelaySeconds`
+- `ScheduledAt = now + computed delay`
 
-And a `StepRetryScheduled` event is written.
+The workflow instance is moved to `AwaitingRetry` while the retry is pending.
+
+A `StepRetryScheduled` event is written. Its payload includes the `backoffStrategy` and `delaySeconds` that were applied.
 
 ### If retries are exhausted
 
@@ -304,6 +330,8 @@ Important properties of the current implementation:
 
 The ops API exposes four manual actions.
 
+Each action has a corresponding eligibility flag returned by the instance detail API: `CanRetry`, `CanReplay`, `CanCancel`, and `CanArchive`. The ops UI uses these flags to enable or disable action buttons contextually.
+
 ### Retry
 
 Endpoint:
@@ -314,7 +342,7 @@ Behavior:
 
 - valid only for a `Failed` workflow instance
 - finds the most recent failed execution
-- creates a fresh `Pending` execution for the same step
+- creates a fresh `Pending` execution for the same step where execution last failed (not from step 1)
 - resets `Attempt` to `1`
 - moves the workflow instance back to `Running`
 - writes a `WorkflowRetried` event
@@ -327,15 +355,10 @@ Endpoint:
 
 Behavior:
 
-- valid for `Failed` or `Completed` instances
-- creates a new `Pending` execution for the first step
-- moves the workflow instance back to `Running`
-- clears `CompletedAt`
-- writes a `WorkflowReplayed` event
-
-Important current behavior:
-
-- replay currently restarts from step 1 only
+- valid for the current replay-eligible workflow states
+- performs a version safety check: throws if the workflow definition version has changed since the original instance was created
+- writes replay metadata including the prior execution count in the event payload
+- creates a new workflow instance that re-executes from the beginning of the step path
 
 ### Cancel
 
@@ -362,6 +385,7 @@ Endpoint:
 Behavior:
 
 - hides the instance from the default list view
+- blocks instances in `AwaitingRetry` status (they must be cancelled first)
 - cancels any `Pending` step executions
 - writes a `WorkflowArchived` event
 
@@ -369,12 +393,24 @@ Behavior:
 
 The ops API exposes read endpoints for:
 
+- template catalog
 - workflow definitions
-- paged workflow instance list
-- instance detail
-- timeline
+- paged workflow instance list (supports date range and trigger type filters)
+- instance detail (includes trigger type, trigger data, and action eligibility flags)
+- trail
 
-The timeline is driven by `workflow_events`.
+### Structured trail
+
+The `WorkflowTrail` endpoint returns a structured view of execution history:
+
+- steps are grouped by step key
+- within each group, attempts are ordered chronologically
+- waiting and retry metadata (delay, backoff strategy, scheduled time) are included on retry entries
+- replay events are surfaced so operators can see when and why a replay was initiated
+
+### Chronological event trail
+
+The event trail surface is driven by workflow state plus persisted workflow events.
 
 That gives operators a chronological record of what happened:
 
@@ -403,4 +439,4 @@ These are important to keep in mind when reasoning about the current implementat
 - retries, replay, and recurring dispatch all create new execution rows instead of mutating one row forever
 - workflow definitions are synced from code into the database at API startup
 - the ops UI is authenticated, but the webhook trigger is intentionally public
-- webhook malformed JSON currently results in `null` input instead of a `400`
+- webhook malformed JSON now returns `400 Bad Request`

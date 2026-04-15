@@ -46,10 +46,14 @@ So the architecture is:
         | - Razor Pages ops UI    |
         | - Cookie auth           |
         | - Ops API               |
-        | - Workflow registry     |
+        | - Template registry     |
+        | - Definition CRUD       |
+        | - Template catalog      |
         | - Definition sync       |
+        | - Workflow authoring    |
         | - Start/retry/replay    |
         | - Cancel/archive        |
+        | - Trail queries         |
         | - Secrets endpoints     |
         +-----------+-------------+
                     |
@@ -80,7 +84,13 @@ Primary responsibilities:
 - OpenAPI and Scalar exposure
 - EF Core migration application on startup
 - tenant seed for local development
+- exposing the template catalog from code-registered workflow descriptors
 - syncing code-first workflow descriptors into database metadata
+- creating and editing executable workflow definitions
+- workflow definition CRUD (create, edit, activate/deactivate, clone)
+- structured trail view endpoint
+- template catalog Razor Page
+- three-section ops UI: Instances, Workflows, Templates
 - workflow start command handling
 - manual retry, replay, cancel, and archive operations
 - operational query endpoints
@@ -97,11 +107,14 @@ Primary responsibilities:
 - claiming due `workflow_step_executions`
 - lease extension while handlers run
 - recovering orphaned `Running` executions with expired locks
-- resolving step handlers from DI
+- resolving step executors from DI
 - running step logic
 - writing execution results
 - scheduling next steps
 - scheduling retries
+- failure classification of step execution errors
+- retry policy resolution with configurable backoff (Fixed/Exponential)
+- AwaitingRetry status transitions
 - dispatching recurring workflow schedules
 - sending alerts for workflow failure and orphan recovery
 
@@ -115,8 +128,14 @@ Primary responsibilities:
 - entity classes
 - entity configuration classes
 - workflow registration abstractions
-- step handler contracts
+- executable workflow contracts
+- step executor contracts
 - shared DI extensions
+- workflow definitions domain model (WorkflowDefinition, TriggerDefinition, StepDefinition)
+- RetryPolicy model with BackoffStrategy
+- FailureClassification enum
+- WorkflowDefinitionStatus enum (Draft, Active, Inactive, Archived)
+- executable definition persistence (ExecutableWorkflowDefinitionRecord, ExecutableTriggerDefinitionRecord, ExecutableStepDefinitionRecord)
 
 This project acts as the shared contract and persistence layer for both hosts.
 
@@ -126,9 +145,14 @@ From a system-capability point of view, the current solution groups into these a
 
 ### Workflow Definitions
 
-- define workflows in code
-- register them at startup
-- persist them to the database
+- define templates in code
+- register templates at startup
+- persist executable workflow definitions to the database
+- support manual and template-based workflow creation
+- create workflow definitions (blank, from template, clone)
+- edit trigger and step configurations via UI
+- activate/deactivate definitions
+- source template tracking
 - optionally attach recurrence metadata to a definition
 
 ### Workflow Runtime
@@ -151,8 +175,9 @@ From a system-capability point of view, the current solution groups into these a
 
 ### Operations Console
 
-- Razor Pages instance list and details
-- packaged template setup flow
+- three sections: Instances list/detail, Workflow definition editor, Template catalog
+- structured trail view with attempt history
+- action eligibility (CanRetry, CanReplay, CanCancel, CanArchive)
 - login/logout
 - manual retry, replay, cancel, and archive actions
 
@@ -176,14 +201,16 @@ Instead:
 
 This is the core design decision that makes the system restart-tolerant and inspectable.
 
-### 2. Code-first workflow registration with database sync
+### 2. Code-first templates plus persisted workflow definitions
 
-Workflows are defined as C# descriptors, then synchronized into database metadata.
+Templates are defined as C# descriptors, then synchronized into database metadata.
+
+Users do not edit or execute those descriptors directly. They create persisted workflow definitions from templates or manually through the authoring UI.
 
 That gives:
 
-- versioned workflow definitions in code
-- database visibility for runtime and read-side behavior
+- versioned template blueprints in code
+- persisted workflow definitions for runtime and read-side behavior
 - simple registration without a dynamic builder or plugin model
 
 ### 3. Append-oriented execution history
@@ -207,7 +234,18 @@ Separately, the webhook trigger endpoint is intentionally public and narrow:
 - it delegates to the same start logic
 - it uses headers for idempotency and external correlation
 
-### 5. Simple configuration and alerting model
+### 5. Constrained workflow authoring plus simple configuration
+
+Workflow authoring remains intentionally form-driven:
+
+- one trigger per workflow
+- ordered steps
+- explicit trigger and step-type forms
+- no drag-and-drop graph builder
+
+That keeps the product model understandable while still supporting both template-based and manual creation flows.
+
+### 6. Simple alerting model
 
 External step configuration remains explicit:
 
@@ -239,7 +277,7 @@ This keeps the implementation minimal while still supporting real integrations.
 1. Build the DI container.
 2. Register database access.
 3. Register workflow registry.
-4. Register step handlers.
+4. Register step executors.
 5. Register alert channels and supporting services.
 6. Start the background loop.
 7. Each loop iteration:
@@ -253,7 +291,7 @@ This keeps the implementation minimal while still supporting real integrations.
 - clear split between operator API/UI and background execution
 - durable execution state
 - explicit lifecycle transitions
-- webhook and template support without introducing a plugin framework
+- template catalog and workflow authoring without introducing a plugin framework
 - recoverable worker model based on row locking and lease expiry
 - simple mental model for debugging through instance, steps, events, schedules, and secrets
 
@@ -264,7 +302,8 @@ This keeps the implementation minimal while still supporting real integrations.
 - workflow secrets are stored in plaintext
 - timeout handling is partly cooperative: a handler that ignores cancellation can still remain `Running`
 - the system depends heavily on database coordination, so schema quality and indexes matter a lot
-- there are no separate test projects yet, so many guarantees are still verified manually
+- some workflow authoring and replay semantics are still in transition, so product design is slightly ahead of a few runtime details
+- the solution includes unit and integration tests using Testcontainers for PostgreSQL
 
 ## Bottom Line
 

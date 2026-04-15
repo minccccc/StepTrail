@@ -1,20 +1,21 @@
 # Development Runbook
 
-This document covers local setup, startup behavior, configuration, and current operational notes.
+This document covers local setup, startup behavior, useful URLs, and current operational notes for the current StepTrail solution.
 
 ## Local Prerequisites
 
 - .NET 9 SDK
-- PostgreSQL (or Docker for local PostgreSQL)
-- VS Code (optional — for the provided debug configuration)
+- PostgreSQL
+- optional: Docker for local PostgreSQL
+- optional: VS Code
 
 ## Repository Shape
 
 Relevant top-level folders:
 
-- `src` — solution projects
-- `docs` — architecture and authoring guides
-- `condex-docs` — code-aligned documentation set (this folder)
+- `src` - solution projects
+- `docs` - product and authoring guides
+- `condex-docs` - code-aligned implementation docs
 
 ## Configuration
 
@@ -27,9 +28,11 @@ Key settings:
 | Key | Default | Description |
 |-----|---------|-------------|
 | `ConnectionStrings:StepTrailDb` | local Postgres | Database connection string |
-| `UI:ApiBaseUrl` | `http://localhost:5000` | Base URL for `WorkflowApiClient` loopback calls |
-| `Ops:Username` | `admin` | Ops console login username |
-| `Ops:Password` | `admin` | Ops console login password |
+| `UI:ApiBaseUrl` | `http://localhost:5000` | Base URL used by `WorkflowApiClient` loopback calls |
+| `Ops:Username` | `admin` | Ops console username |
+| `Ops:Password` | `admin` | Ops console password |
+| `ApiTriggerAuthentication:SharedSecret` | empty | Shared secret for API-trigger auth |
+| `ApiTriggerAuthentication:AllowUnauthenticated` | false in production config | Explicit local/dev opt-out for API-trigger auth |
 
 Override credentials in non-local environments:
 
@@ -47,16 +50,16 @@ Key settings:
 | Key | Default | Description |
 |-----|---------|-------------|
 | `ConnectionStrings:StepTrailDb` | local Postgres | Database connection string |
-| `Worker:PollIntervalSeconds` | `5` | Seconds between polling loop iterations |
-| `Worker:HeartbeatIntervalSeconds` | `60` | Seconds between `StepLeaseRenewer` heartbeats |
-| `Worker:DefaultLockExpirySeconds` | `300` | Lock window granted on claim; renewed each heartbeat |
-| `Alerts:WebhookUrl` | `""` | Set to a non-empty URL to enable webhook failure alerts |
+| `Worker:PollIntervalSeconds` | `5` | Poll loop interval |
+| `Worker:HeartbeatIntervalSeconds` | `60` | Lease-renewal heartbeat interval |
+| `Worker:DefaultLockExpirySeconds` | `300` | Initial claim lease window |
+| `Alerts:WebhookUrl` | `""` | Optional outbound alert webhook |
 
 ## Database Startup
 
-The repository assumes a PostgreSQL instance at:
+The default local connection string expects:
 
-```
+```text
 Host=localhost;Port=5432;Database=steptrail;Username=steptrail;Password=steptrail
 ```
 
@@ -72,27 +75,29 @@ docker run -d \
   postgres:16
 ```
 
-If the container already exists: `docker start steptrail-postgres`
+If the container already exists:
+
+```bash
+docker start steptrail-postgres
+```
 
 ## Running The Solution
 
 ### Option 1: VS Code
 
-The workspace contains debug configurations for:
+The workspace includes launch configurations for:
 
 - `StepTrail.Api`
 - `StepTrail.Worker`
-- compound launch: `StepTrail: API + Worker`
-
-This is the easiest way to run both processes together.
+- the combined API + Worker launch
 
 ### Option 2: Terminal
 
 ```bash
-# API (applies DB migrations automatically)
+# API
 cd src/StepTrail.Api && dotnet run
 
-# Worker (separate terminal)
+# Worker
 cd src/StepTrail.Worker && dotnet run
 ```
 
@@ -103,32 +108,48 @@ cd src/StepTrail.Worker && dotnet run
 When the API starts, it:
 
 1. builds the web app
-2. exposes OpenAPI and Scalar
-3. registers cookie authentication
-4. applies pending EF Core migrations
-5. seeds the default tenant if missing
-6. syncs registered workflows and recurring schedules into database metadata
-7. seeds sample data if `ASPNETCORE_ENVIRONMENT=Development` (`DevDataSeedService`)
-8. starts serving HTTP traffic
+2. configures cookie auth and Razor Pages
+3. applies pending EF Core migrations
+4. seeds the default tenant if needed
+5. syncs code-registered workflow descriptors into the template catalog / definition metadata
+6. seeds development data when `ASPNETCORE_ENVIRONMENT=Development`
+7. starts serving HTTP traffic
 
 ### Worker startup
 
 When the worker starts, it:
 
 1. builds the host
-2. registers step handlers and supporting services
-3. starts the polling loop — each iteration:
-   - dispatches due recurring workflow schedules
-   - recovers orphaned executions with expired leases
+2. registers step executors and support services
+3. enters the poll loop
+4. on each loop:
+   - dispatches due recurring schedules
+   - recovers orphaned executions
    - claims and processes one due step execution
 
 ## Migrations
 
-Migrations live in `src/StepTrail.Api/Migrations/`.
+Migrations live in:
 
-The API applies pending migrations automatically on startup. No manual migration step is needed for local development.
+- `src/StepTrail.Api/Migrations/`
 
-To add a new migration after changing entities:
+The API applies pending migrations automatically on startup.
+
+| Migration | Change |
+|-----------|--------|
+| `AddExecutableDefinitionPersistence` | Executable workflow/trigger/step definition tables |
+| `AddExecutableDefinitionSnapshotsToWorkflowInstances` | Link instances to executable definitions |
+| `AddActiveWorkflowDefinitionVersionUniqueness` | Unique constraint on active definition versions |
+| `AddTriggerDataToWorkflowInstance` | Trigger data on instances |
+| `AddWebhookRouteKeyToExecutableDefinitions` | Webhook route key on definitions |
+| `ScopeIdempotencyByWorkflowKey` | Idempotency scoped by workflow key |
+| `AddExecutableRecurringSchedules` | Recurring schedules for executable definitions |
+| `AddCronSupportToRecurringSchedules` | Cron expression support |
+| `AddFailureClassificationToStepExecution` | Failure classification column |
+| `AddRetryPolicyJsonColumns` | Retry policy JSON on steps and executions |
+| `AddSourceTemplateMetadata` | Source template key/version tracking |
+
+To add a migration:
 
 ```bash
 dotnet ef migrations add YourMigrationName \
@@ -136,61 +157,98 @@ dotnet ef migrations add YourMigrationName \
   --startup-project src/StepTrail.Api
 ```
 
-Current migrations:
+## Automated Verification
 
-| Migration | Change |
-|-----------|--------|
-| `InitialSchema` | Base tables and constraints |
-| `RemoveTenantFromWorkflowDefinition` | Definitions made global |
-| `AddRetryPolicyToWorkflowDefinitionStep` | `max_attempts`, `retry_delay_seconds` |
-| `AddTimeoutAndLockExpiry` | `timeout_seconds`, `lock_expires_at`, `started_at` |
-| `AddRecurringWorkflowSchedules` | `recurring_workflow_schedules` table |
-| `AddStepConfig` | `config` on definition steps |
-| `AddWorkflowSecrets` | `workflow_secrets` table |
+The solution has automated tests.
 
-## Operational Checks
-
-Useful endpoints while developing:
-
-- `GET /health` — database connectivity
-- `GET /workflows` — registered workflow definitions
-- `GET /workflow-instances` — instance list
-- `GET /workflow-instances/{id}/timeline` — event history for one instance
-- `GET /secrets` — list configured secret names
-
-Useful local URLs:
-
-- Scalar UI: `http://localhost:5000/scalar/v1`
-- Ops login: `http://localhost:5000/login` (default: `admin` / `admin`)
-- Ops console: `http://localhost:5000/ops/workflows`
-- Template setup: `http://localhost:5000/ops/templates`
-
-## First-Time Template Setup
-
-To test the `webhook-to-http-call` template end-to-end:
-
-1. Navigate to `http://localhost:5000/ops/templates`
-2. Click **Set up & Run** on the Webhook → HTTP Call card
-3. Enter a target URL (e.g. a `https://webhook.site` receiver) and click **Save & Run Now**
-4. The wizard saves the secret and starts an instance — you are redirected to the details page
-
-For subsequent triggers without the wizard:
+Run them with:
 
 ```bash
-curl -X POST http://localhost:5000/webhooks/webhook-to-http-call \
-  -H "Content-Type: application/json" \
-  -d '{"event": "test"}'
+dotnet test StepTrail.sln
 ```
 
-## Current Known Limitations
+## Useful Endpoints
 
-These are worth knowing before building on top of the current code:
+### Health and docs
 
-- there are no automated test projects in the solution
-- workflow replay currently restarts from step 1 only; there is no arbitrary-step replay
-- step timeout enforcement is cooperative — a handler that ignores the `CancellationToken` cannot be force-terminated; orphan recovery only kicks in after the lock expires (default 5 minutes)
-- if `RecurrenceIntervalSeconds` is added to an existing workflow descriptor without bumping the version, the recurring schedule is not created (the definition already exists and the sync is skipped); bump the version to trigger re-sync
-- if a `recurring_workflow_schedules` row is manually deleted from the database, it is not automatically recreated on the next startup for an already-synced definition
-- the committed ops credentials (`admin`/`admin`) must be overridden via `Ops__Username` and `Ops__Password` environment variables before any non-local deployment
-- secrets are global — not tenant-scoped
-- the webhook endpoint silently discards malformed JSON bodies and starts the workflow with null input rather than returning `400 Bad Request`
+- `GET /health`
+- `GET /openapi/v1.json`
+- `GET /scalar/v1`
+
+### Template and workflow definition surfaces
+
+- `GET /workflows` - registered template descriptors
+- `GET /workflow-definitions` - list executable workflow definitions
+
+### Instance and trail surfaces
+
+- `GET /workflow-instances`
+- `GET /workflow-instances/{id}`
+- `GET /workflow-instances/{id}/trail` - structured trail with attempt history
+
+### Secrets
+
+- `GET /secrets`
+- `PUT /secrets/{name}`
+- `DELETE /secrets/{name}`
+
+## Useful Local URLs
+
+- Scalar UI: `http://localhost:5000/scalar/v1`
+- Ops login: `http://localhost:5000/login`
+- Ops console (Instances): `http://localhost:5000/ops/workflows`
+- Workflow definitions: `http://localhost:5000/ops/definitions`
+- Template catalog: `http://localhost:5000/ops/templates`
+
+## First-Time Authoring Flows
+
+### Create from template
+
+1. Navigate to `http://localhost:5000/ops/templates`
+2. Review the template previews showing full step configuration
+3. Click **Use Template** on any template
+4. Fill in name, key, and trigger type, then click **Create Workflow**
+5. You are redirected to the workflow editor where you can configure trigger details and step settings
+6. Click **Activate** when ready, then trigger the workflow
+
+### Create manually
+
+1. Open `http://localhost:5000/ops/definitions`
+2. Click **+ New Workflow**
+3. Enter the workflow name and key
+4. Choose the initial trigger type
+5. Configure trigger and steps in the workflow editor
+6. Activate the workflow
+
+## Trigger Testing Notes
+
+### Webhook-triggered workflows
+
+Webhook routes are now keyed by the configured webhook route key, not by the workflow key.
+
+Example:
+
+```bash
+curl -X POST http://localhost:5000/webhooks/my-route-key \
+  -H "Content-Type: application/json" \
+  -d '{"event":"test"}'
+```
+
+### Manual instance start page
+
+The instances page includes:
+
+- `/ops/workflows/create`
+
+Use it to start a new workflow instance for testing from the operations console.
+
+## Current Notes And Caveats
+
+- workflow authoring is now split into Templates, Workflows, and Instances in the UI
+- template-based workflow creation stores source-template metadata
+- manual workflow creation currently starts from a workflow draft that must contain at least one step definition
+- workflow definition validation on activation checks for required fields but does not validate runtime reachability of HTTP endpoints
+- replay behavior is still a known area of active refinement; the current implementation remains more permissive than the intended long-term replay model
+- API-trigger auth should be configured explicitly outside local development
+- secrets are global, not tenant-scoped
+- the committed ops credentials should be overridden in any non-local environment

@@ -10,17 +10,26 @@ Today it runs as:
 
 Current capabilities include:
 
-- code-first workflow definitions with DB sync
-- idempotent workflow start
-- durable step execution with row locking
-- retries, replay, cancel, and archive operations
-- worker lease renewal and orphan recovery
-- recurring workflow dispatch
-- webhook-triggered starts
+- Three-level model: Templates (predefined blueprints) -> Workflow Definitions (user-owned, editable) -> Workflow Instances (runtime)
+- Code-first workflow descriptors with DB sync (IWorkflowRegistry)
+- UI-based workflow definition authoring (create blank, from template, or clone)
+- All trigger types: Webhook, Manual, API, Schedule (interval + cron)
+- All step types: HttpRequest, SendWebhook, Transform, Conditional, Delay
+- RetryPolicy model with configurable backoff (Fixed/Exponential), max attempts, delay, timeout-aware retries
+- Failure classification (Transient, Permanent, InvalidConfiguration, InputResolutionFailure)
+- Durable step execution with row locking and lease renewal
+- AwaitingRetry status for automatic retry scheduling
+- Retry (from failed step), Replay (from step 1), Cancel, and Archive operations
+- Structured trail view with attempt history
+- Orphan recovery via lease expiry detection
+- Recurring workflow dispatch (interval + cron)
+- Webhook-triggered and API-triggered starts
 - HTTP activity steps with stored response output
-- workflow secrets and alert fanout
-- a basic authenticated operations console
-- a first packaged template: `webhook-to-http-call`
+- Workflow secrets and placeholder resolution
+- Alert fanout (console log + optional webhook)
+- Authenticated operations console with three-section navigation
+- Two packaged templates: user-onboarding, webhook-to-http-call
+- Comprehensive test suite (unit + integration tests with Testcontainers)
 
 ## Start Here
 
@@ -77,7 +86,9 @@ Useful local URLs:
 
 - API docs: `http://localhost:5000/scalar/v1`
 - Ops login: `http://localhost:5000/login`
-- Ops console: `http://localhost:5000/ops/workflows`
+- Ops console: `http://localhost:5000/ops/workflows` (Instances)
+- Workflow definitions: `http://localhost:5000/ops/definitions`
+- Template catalog: `http://localhost:5000/ops/templates`
 
 Important local note:
 

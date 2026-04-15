@@ -497,6 +497,7 @@ public sealed class WorkflowDescriptorSummary
     public int Version { get; init; }
     public string Name { get; init; } = string.Empty;
     public string? Description { get; init; }
+    public int? RecurrenceIntervalSeconds { get; init; }
     public IReadOnlyList<WorkflowDescriptorStepSummary> Steps { get; init; } = [];
 }
 
@@ -505,4 +506,8 @@ public sealed class WorkflowDescriptorStepSummary
     public int Order { get; init; }
     public string StepKey { get; init; } = string.Empty;
     public string StepType { get; init; } = string.Empty;
+    public int MaxAttempts { get; init; }
+    public int RetryDelaySeconds { get; init; }
+    public int? TimeoutSeconds { get; init; }
+    public string? Config { get; init; }
 }

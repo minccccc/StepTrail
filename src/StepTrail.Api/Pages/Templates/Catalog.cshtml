@@ -7,8 +7,11 @@
 <div class="d-flex align-items-center justify-content-between mb-4">
     <div>
         <h1 class="h3 mb-1">Templates</h1>
-        <p class="text-muted mb-0 small">Predefined workflow blueprints. Use a template to create a new workflow.</p>
+        <p class="text-muted mb-0 small">
+            Predefined workflow blueprints. Review the default configuration, then pick a template to create a new workflow.
+        </p>
     </div>
+    <span class="text-muted small">@Model.Templates.Count template(s)</span>
 </div>
 
 @if (Model.ErrorMessage is not null)
@@ -24,60 +27,115 @@ else if (!Model.Templates.Any())
 }
 else
 {
-    <div class="row g-4">
-        @foreach (var template in Model.Templates)
-        {
-            <div class="col-md-6 col-lg-4">
-                <div class="card shadow-sm h-100">
-                    <div class="card-body d-flex flex-column">
-                        <div class="d-flex align-items-center gap-2 mb-2">
-                            <span class="badge bg-light text-dark border">v@template.Version</span>
-                            <span class="badge bg-light text-muted border">@template.Steps.Count step(s)</span>
-                        </div>
+    @foreach (var template in Model.Templates)
+    {
+        <div class="card shadow-sm mb-4">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <div>
+                    <span class="fw-semibold fs-5">@template.Name</span>
+                    <span class="badge bg-light text-dark border ms-2">v@template.Version</span>
+                    <span class="badge bg-light text-muted border ms-1">@template.Steps.Count step(s)</span>
+                    @if (template.RecurrenceIntervalSeconds.HasValue)
+                    {
+                        <span class="badge bg-warning text-dark ms-1" title="Runs every @template.RecurrenceIntervalSeconds seconds">
+                            Recurring: every @FormatInterval(template.RecurrenceIntervalSeconds.Value)
+                        </span>
+                    }
+                </div>
+                <a href="/ops/definitions/from-template?descriptorKey=@Uri.EscapeDataString(template.Key)&descriptorVersion=@template.Version"
+                   class="btn btn-primary btn-sm">
+                    Use Template
+                </a>
+            </div>
+            <div class="card-body">
+                <p class="font-monospace text-muted small mb-2">@template.Key</p>
+                @if (!string.IsNullOrWhiteSpace(template.Description))
+                {
+                    <p class="text-muted mb-3">@template.Description</p>
+                }
 
-                        <h5 class="card-title mb-1">@template.Name</h5>
-                        <p class="font-monospace text-muted small mb-2">@template.Key</p>
+                <p class="text-muted small fw-semibold mb-2">
+                    Trigger type is chosen when you use this template.
+                </p>
 
-                        @if (!string.IsNullOrWhiteSpace(template.Description))
-                        {
-                            <p class="card-text text-muted small flex-grow-1">@template.Description</p>
-                        }
-                        else
-                        {
-                            <div class="flex-grow-1"></div>
-                        }
+                @if (template.Steps.Count > 0)
+                {
+                    <h6 class="fw-semibold mb-2 mt-3">Steps</h6>
+                    @foreach (var step in template.Steps.OrderBy(s => s.Order))
+                    {
+                        <div class="border rounded p-3 mb-2 bg-light">
+                            <div class="d-flex align-items-center gap-2 mb-1">
+                                <span class="text-muted small fw-semibold">#@step.Order</span>
+                                <span class="font-monospace fw-semibold">@step.StepKey</span>
+                                @Html.Raw(StepTypeBadge(step.StepType))
+                            </div>
 
-                        @if (template.Steps.Count > 0)
-                        {
-                            <div class="d-flex align-items-center gap-1 mt-2 small text-muted border-top pt-2 flex-wrap">
-                                <span class="fw-semibold">Trigger</span>
-                                @foreach (var step in template.Steps.OrderBy(s => s.Order))
+                            <div class="row g-2 mt-1 small">
+                                <div class="col-auto">
+                                    <span class="text-muted">Retry:</span>
+                                    <span>@step.MaxAttempts attempts, @step.RetryDelaySeconds s delay</span>
+                                </div>
+                                @if (step.TimeoutSeconds.HasValue)
                                 {
-                                    <span>&rarr;</span>
-                                    <span title="@step.StepKey">@StepTypeLabel(step.StepType)</span>
+                                    <div class="col-auto">
+                                        <span class="text-muted">Timeout:</span>
+                                        <span>@step.TimeoutSeconds s</span>
+                                    </div>
                                 }
                             </div>
-                        }
 
-                        <a href="/ops/definitions/from-template?descriptorKey=@Uri.EscapeDataString(template.Key)&descriptorVersion=@template.Version"
-                           class="btn btn-primary btn-sm mt-3">
-                            Use Template
-                        </a>
-                    </div>
-                </div>
+                            @if (!string.IsNullOrWhiteSpace(step.Config))
+                            {
+                                <div class="mt-2">
+                                    <span class="text-muted small fw-semibold">Configuration</span>
+                                    <pre class="json-block mt-1 mb-0" style="max-height:160px">@FormatJson(step.Config)</pre>
+                                </div>
+                            }
+                        </div>
+                    }
+                }
+                else
+                {
+                    <p class="text-muted small">No steps defined in this template.</p>
+                }
             </div>
-        }
-    </div>
+        </div>
+    }
 }
 
 @functions {
-    static string StepTypeLabel(string stepType) => stepType switch
+    static string StepTypeBadge(string stepType)
     {
-        "HttpRequest" or "HttpActivityHandler" => "HTTP",
-        "SendWebhook" or "SendWebhookStepExecutor" => "Webhook",
-        "Transform" or "TransformStepExecutor" => "Transform",
-        "Conditional" or "ConditionalStepExecutor" => "Conditional",
-        "Delay" or "DelayStepExecutor" => "Delay",
-        _ => stepType
+        var (label, css) = stepType switch
+        {
+            "HttpRequest" or "HttpActivityHandler" => ("HTTP Request", "bg-primary"),
+            "SendWebhook" or "SendWebhookStepExecutor" => ("Send Webhook", "bg-info text-dark"),
+            "Transform" or "TransformStepExecutor" => ("Transform", "bg-success"),
+            "Conditional" or "ConditionalStepExecutor" => ("Conditional", "bg-warning text-dark"),
+            "Delay" or "DelayStepExecutor" => ("Delay", "bg-secondary"),
+            _ => (stepType, "bg-light text-dark border")
+        };
+        return $"<span class=\"badge {css}\">{label}</span>";
+    }
+
+    static string FormatInterval(int seconds) => seconds switch
+    {
+        < 60 => $"{seconds}s",
+        < 3600 => $"{seconds / 60}m",
+        _ => $"{seconds / 3600}h {(seconds % 3600) / 60}m"
     };
+
+    static string FormatJson(string json)
+    {
+        try
+        {
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+            return System.Text.Json.JsonSerializer.Serialize(
+                doc, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        }
+        catch
+        {
+            return json;
+        }
+    }
 }

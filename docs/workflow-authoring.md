@@ -1,339 +1,223 @@
 # Workflow Authoring Guide
 
-This guide walks through creating a new workflow from scratch: defining the workflow descriptor, implementing step handlers, and registering everything.
+This guide describes the two supported approaches for authoring workflows in StepTrail:
 
-The built-in examples are:
-- `UserOnboardingWorkflow` (3 steps: send welcome email → provision account → notify team) in `src/StepTrail.Api/Workflows/`
-- `WebhookToHttpCallWorkflow` (1 step: forward webhook payload to an HTTP endpoint) — the packaged template workflow
+- **Code-first**: workflow descriptors (templates) registered in code, synced to the system at startup
+- **UI-based**: create and edit workflow definitions through the ops console at `/ops/definitions` (blank, from template, or clone)
 
----
+Both approaches produce the same runtime artifact: an executable workflow definition that can be activated, triggered, and monitored.
 
-## Overview
+## Top-Level Product Model
 
-A workflow in StepTrail consists of two parts:
+StepTrail has three distinct concepts arranged in a hierarchy:
 
-1. **A workflow descriptor** — a C# class that declares the workflow's identity and its ordered list of steps. Lives in `StepTrail.Api` (or wherever you start instances from).
-2. **Step handlers** — one C# class per step, implementing `IStepHandler`. Live in `StepTrail.Worker` (where steps are executed).
+- **Template** -- a predefined, code-registered workflow blueprint shown in the Templates catalog. Read-only; sourced from `IWorkflowRegistry`.
+- **Workflow Definition** -- a persisted, user-owned workflow definition that can be edited, activated, or deactivated.
+- **Workflow Instance** -- one concrete execution of a workflow definition.
 
----
+The relationships are:
 
-## Step 1 — Define the Workflow Descriptor
+- `Template -> Workflow Definition -> Workflow Instance`
+- `Manual / Clone creation -> Workflow Definition -> Workflow Instance`
 
-Create a class in `src/StepTrail.Api/Workflows/` that extends `WorkflowDescriptor`:
+Templates are never edited directly in the UI. A user either creates a workflow definition from a template, creates one from scratch, or clones an existing definition.
 
-```csharp
-// src/StepTrail.Api/Workflows/OrderFulfillmentWorkflow.cs
-using StepTrail.Shared.Workflows;
+## Authoring Surfaces
 
-public sealed class OrderFulfillmentWorkflow : WorkflowDescriptor
-{
-    public override string Key => "order-fulfillment";
-    public override int Version => 1;
-    public override string Name => "Order Fulfillment";
-    public override string? Description => "Reserves inventory, charges payment, and ships the order.";
+The Razor Pages authoring and operations UI is split into three top-level areas:
 
-    public override IReadOnlyList<WorkflowStepDescriptor> Steps =>
-    [
-        new("reserve-inventory", nameof(ReserveInventoryHandler), order: 1),
-        new("charge-payment",    nameof(ChargePaymentHandler),    order: 2,
-            maxAttempts: 5, retryDelaySeconds: 60),
-        new("ship-order",        nameof(ShipOrderHandler),        order: 3,
-            timeoutSeconds: 120),
-    ];
-}
-```
+- `/ops/templates` -- template catalog with full configuration preview
+- `/ops/definitions` -- workflow definitions list
+- `/ops/workflows` -- workflow instances list
 
-### WorkflowStepDescriptor Parameters
+Within those areas, the main authoring pages are:
 
-| Parameter | Type | Required | Default | Notes |
-|-----------|------|----------|---------|-------|
-| `stepKey` | `string` | yes | — | Unique key within this workflow. Used in queries and logs. |
-| `stepType` | `string` | yes | — | Must match the handler's keyed DI registration. Use `nameof(YourHandler)`. |
-| `order` | `int` | yes | — | 1-based execution order. Must be unique within the workflow. |
-| `maxAttempts` | `int` | no | `3` | How many times this step is attempted before the workflow is marked Failed. |
-| `retryDelaySeconds` | `int` | no | `30` | Seconds to wait before scheduling the next attempt after a failure. |
-| `timeoutSeconds` | `int?` | no | `null` | If set, the handler is cancelled after this many seconds. Null = no timeout. |
-| `config` | `object?` | no | `null` | Handler-specific configuration. Serialised to JSON and stored in the DB. |
+- `/ops/definitions/from-template?descriptorKey=...&descriptorVersion=...` -- create a workflow from a template
+- `/ops/definitions/new` -- create a blank workflow
+- `/ops/definitions/edit?id={guid}` -- edit one workflow definition
+- `/ops/templates` -- browse registered templates and preview their configuration
 
-### Versioning
+## Trigger Types
 
-- `Key` + `Version` must be globally unique.
-- To change a workflow's steps or config, create a new class with the same `Key` and a higher `Version`.
-- Old versions remain in the database and continue running for existing instances.
-- `FindLatest` always returns the highest registered version.
+Each workflow definition has exactly one trigger. The four supported trigger types are:
 
-### Recurring Workflows
+| Type | Description |
+|------|-------------|
+| **Webhook** | Receives external HTTP payloads with signature validation and input mapping. |
+| **Manual** | Triggered from the ops console. |
+| **Api** | Triggered via API call. |
+| **Schedule** | Recurring execution via a fixed interval or cron expression. |
 
-Override `RecurrenceIntervalSeconds` to have the worker automatically start a new instance on a fixed schedule:
+The trigger section in the editor renders a type-specific configuration form for the currently selected trigger type.
 
-```csharp
-public override int? RecurrenceIntervalSeconds => 3600; // every hour
-```
+## Step Types
 
-`WorkflowDefinitionSyncService` creates a `recurring_workflow_schedules` row on first startup. `RecurringWorkflowDispatcher` in the worker fires new instances when `next_run_at` is due and advances the schedule.
+Workflow definitions contain an ordered list of steps. The five supported step types are:
 
----
+| Type | Description |
+|------|-------------|
+| **HttpRequest** | Outbound HTTP calls with configurable URL, method, headers, body, and timeout. |
+| **SendWebhook** | Similar to HttpRequest but optimized for webhook delivery. |
+| **Transform** | Maps and transforms data between steps using input mappings. |
+| **Conditional** | Evaluates conditions on step output (SourcePath, Operator, ExpectedValue, FalseOutcome). |
+| **Delay** | Pauses workflow execution for a specified duration or until a target time. |
 
-## Step 2 — Implement Step Handlers
+Steps are rendered in order in the editor. Each step shows its key, type, order, an edit form for type-specific configuration, move up/down actions, and a remove action (when the workflow has more than one step).
 
-Create one class per step in `src/StepTrail.Worker/Handlers/`, implementing `IStepHandler` from `StepTrail.Shared`:
+## Code-First Authoring (Templates)
 
-```csharp
-// src/StepTrail.Worker/Handlers/ReserveInventoryHandler.cs
-using StepTrail.Shared.Workflows;
+Templates are implemented as code-registered workflow descriptors.
 
-public sealed class ReserveInventoryHandler : IStepHandler
-{
-    private readonly ILogger<ReserveInventoryHandler> _logger;
+To add a new template:
 
-    public ReserveInventoryHandler(ILogger<ReserveInventoryHandler> logger)
-        => _logger = logger;
+1. Create a `WorkflowDescriptor` in `src/StepTrail.Api/Workflows/`
+2. Register it in `src/StepTrail.Api/Program.cs` with `AddWorkflow<T>()`
+3. Restart the API so `WorkflowDefinitionSyncService` can sync metadata
 
-    public async Task<StepResult> ExecuteAsync(StepContext context, CancellationToken ct)
-    {
-        // context.Input  — JSON string output from the previous step (or workflow input for step 1)
-        // context.Config — JSON string from WorkflowStepDescriptor config (null if not set)
-        _logger.LogInformation(
-            "Reserving inventory for instance {InstanceId}", context.WorkflowInstanceId);
+The template catalog reads registered descriptors from `GET /workflows`.
 
-        // ... your business logic ...
+Current descriptor shape:
 
-        return StepResult.Success("""{ "reservationId": "abc-123" }""");
-    }
-}
-```
+- key
+- version
+- name
+- description
+- ordered step descriptors
 
-### StepContext
+Important current limitation:
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `WorkflowInstanceId` | `Guid` | The running workflow instance ID |
-| `StepExecutionId` | `Guid` | This step execution's ID |
-| `StepKey` | `string` | The step key (e.g. `"reserve-inventory"`) |
-| `Input` | `string?` | JSON from the previous step's output, or the workflow's initial input for step 1 |
-| `Config` | `string?` | Handler-specific JSON config from the step definition (null if not set) |
+- Descriptor metadata does not currently include trigger-shape metadata.
+- Because of that, trigger type is chosen when the user clicks **Use Template**.
 
-### StepResult
+### Retry on Descriptors vs. RetryPolicy
 
-```csharp
-// Success with output passed to the next step
-return StepResult.Success("""{ "reservationId": "abc-123" }""");
+Workflow step descriptors support `maxAttempts` and `retryDelaySeconds` fields. These are still used for code-first definitions. When a workflow definition is created from a descriptor, these values are converted into a `RetryPolicy` object, which is the model used at runtime.
 
-// Success with no output
-return StepResult.Success();
-```
+The `RetryPolicy` supports:
 
-### Failure Handling
+| Field | Description |
+|-------|-------------|
+| MaxAttempts | Maximum number of execution attempts. |
+| InitialDelaySeconds | Delay before the first retry. |
+| BackoffStrategy | `Fixed` or `Exponential`. |
+| MaxDelaySeconds | Upper bound on delay when using exponential backoff. |
+| RetryOnTimeout | Whether to retry when a step times out. |
 
-**Do not return a failure result — throw an exception.** Any unhandled exception is caught by `StepExecutionProcessor`, stored as the error, and triggers the retry/failure logic.
+## UI-Based Workflow Authoring
 
-```csharp
-// Triggers retry (or marks the workflow Failed if retries are exhausted)
-throw new InvalidOperationException("Payment gateway timeout");
-```
+The ops console provides a full visual authoring experience at `/ops/definitions`.
 
-### Timeouts
+### Creating a Workflow Definition
 
-If `TimeoutSeconds` is configured on the step, the `CancellationToken` passed to `ExecuteAsync` is cancelled after that many seconds. Honor it by using `ct` in all async calls:
+There are three ways to create a new workflow definition:
 
-```csharp
-await _httpClient.PostAsync(url, content, ct); // will throw OperationCanceledException on timeout
-```
+1. **From Template** -- browse `/ops/templates`, pick a template, and click **Use Template**. The template's step configuration is used as the starting shape.
+2. **+ New Workflow** -- click the button at `/ops/definitions` to create a blank definition.
+3. **Clone** -- clone an existing workflow definition from the definitions list.
 
-A step that exceeds its timeout is recorded with event type `StepTimedOut` and treated as a failure (retry/fail policy applies normally).
+In all three cases the new definition starts in **Inactive** status.
 
-### Dependency Injection
+### Editing a Workflow Definition
 
-Handlers are resolved from the DI container (scoped), so you can inject any registered service:
+The editor at `/ops/definitions/edit?id={guid}` allows full configuration:
 
-```csharp
-public sealed class ChargePaymentHandler : IStepHandler
-{
-    private readonly IPaymentGateway _gateway;
+- **Trigger**: select and configure one of the four trigger types (Webhook, Manual, Api, Schedule). Each trigger type renders a type-specific configuration form.
+- **Steps**: add, remove, and reorder steps. Each step type (HttpRequest, SendWebhook, Transform, Conditional, Delay) has its own configuration form.
+- **Retry policy**: each step supports a per-step retry policy override with MaxAttempts, InitialDelaySeconds, BackoffStrategy (Fixed or Exponential), MaxDelaySeconds, and RetryOnTimeout. If no custom policy is set, the default is 3 attempts with a 10-second fixed delay.
+- **Source indicator**: the editor shows `Manual` or `From template: {key}` so you know the definition's origin. Template-derived definitions remember their source template key and version.
 
-    public ChargePaymentHandler(IPaymentGateway gateway) => _gateway = gateway;
+Editing is only allowed when the workflow status is `Inactive`.
 
-    public async Task<StepResult> ExecuteAsync(StepContext context, CancellationToken ct)
-    {
-        var result = await _gateway.ChargeAsync(context.Input, ct);
-        return StepResult.Success(result.ToJson());
-    }
-}
-```
+### Activation Lifecycle
 
----
+Workflow definitions move through these states:
 
-## Built-In Handler: HttpActivityHandler
+- `Inactive`
+- `Active`
 
-`HttpActivityHandler` is a built-in step handler that makes outbound HTTP calls. Use it without writing any custom handler code — just configure the step with a `config` object.
+Current authoring flow:
 
-```csharp
-new WorkflowStepDescriptor(
-    stepKey:           "notify-webhook",
-    stepType:          "HttpActivityHandler",
-    order:             1,
-    maxAttempts:       3,
-    retryDelaySeconds: 30,
-    timeoutSeconds:    30,
-    config: new
-    {
-        Url     = "https://api.example.com/ingest",
-        Method  = "POST",                        // default POST
-        Headers = new { Authorization = "Bearer {{secrets.my-api-key}}" },
-        Body    = null                           // null = forward step input as body
-    })
-```
+- Newly created workflows start as `Inactive`
+- Activation runs backend validation
+- Invalid activation returns explicit validation errors
+- Deactivation moves an active workflow back to `Inactive`
 
-Config fields:
+## Failure and Retry Behavior
 
-| Field | Type | Default | Notes |
-|-------|------|---------|-------|
-| `Url` | `string` | required | Target URL. Supports `{{secrets.name}}` placeholders. |
-| `Method` | `string` | `"POST"` | HTTP method. |
-| `Headers` | `object?` | `null` | Key/value pairs added to the request. Values support `{{secrets.name}}`. |
-| `Body` | `string?` | `null` | Static request body. If null, the step's `Input` JSON is used as the body. |
+### Failure Classification
 
-On a non-2xx response, the handler throws and the retry policy applies. The HTTP status code and response body are persisted as the step's `Output` even on failure — inspect them in the ops console timeline.
+When a step execution fails, the system classifies the failure into one of four categories:
 
----
+| Classification | Behavior |
+|----------------|----------|
+| **TransientFailure** | Retried according to the step's retry policy. |
+| **PermanentFailure** | Skips retries regardless of attempts remaining. |
+| **InvalidConfiguration** | Skips retries regardless of attempts remaining. |
+| **InputResolutionFailure** | Skips retries regardless of attempts remaining. |
 
-## Secrets
+### Retry Scheduling
 
-Store sensitive values (API keys, tokens, URLs) in the `workflow_secrets` table and reference them from step configs using `{{secrets.name}}` placeholders.
+When a transient failure occurs and the step has attempts remaining, the system:
 
-**Setting a secret** — via the ops console (`/ops/templates` setup page, or direct API):
+1. Computes the next retry delay based on the step's retry policy and backoff strategy.
+2. Creates a new pending step execution scheduled for the computed time.
+3. Sets the workflow instance status to **AwaitingRetry**.
 
-```http
-PUT /secrets/my-api-key
-Content-Type: application/json
-
-{ "value": "sk-...", "description": "Third-party API key" }
-```
-
-**Referencing a secret** in a step config:
-
-```csharp
-config: new
-{
-    Url    = "https://api.example.com/endpoint",
-    Headers = new { Authorization = "Bearer {{secrets.my-api-key}}" }
-}
-```
-
-`SecretResolver` in the worker batch-loads all referenced secrets before executing the step. Secret values are never stored in step config, execution rows, or returned by any API endpoint.
-
----
-
-## Step 3 — Register Everything
-
-### Register the workflow descriptor in the API
-
-In `src/StepTrail.Api/Program.cs`:
-
-```csharp
-builder.Services.AddWorkflow<OrderFulfillmentWorkflow>();
-```
-
-`WorkflowDefinitionSyncService` syncs it to the database on next startup.
-
-### Register the handlers in the Worker
-
-In `src/StepTrail.Worker/Program.cs`, add a keyed registration for each handler:
-
-```csharp
-builder.Services.AddKeyedScoped<IStepHandler, ReserveInventoryHandler>(nameof(ReserveInventoryHandler));
-builder.Services.AddKeyedScoped<IStepHandler, ChargePaymentHandler>(nameof(ChargePaymentHandler));
-builder.Services.AddKeyedScoped<IStepHandler, ShipOrderHandler>(nameof(ShipOrderHandler));
-```
-
-The key **must match** the `stepType` in the descriptor. Using `nameof(YourHandler)` in both places guarantees this.
-
-`HttpActivityHandler` is already registered — no action needed for steps that use it.
-
----
-
-## Step 4 — Start an Instance
-
-Via the REST API:
-
-```http
-POST /workflow-instances
-Content-Type: application/json
-
-{
-  "workflowKey": "order-fulfillment",
-  "tenantId": "00000000-0000-0000-0000-000000000001",
-  "externalKey": "order-9871",
-  "idempotencyKey": "fulfill-order-9871",
-  "input": { "orderId": 9871 }
-}
-```
-
-Via the webhook endpoint (useful for external event sources):
-
-```http
-POST /webhooks/order-fulfillment
-X-External-Key: order-9871
-X-Idempotency-Key: fulfill-order-9871
-Content-Type: application/json
-
-{ "orderId": 9871 }
-```
-
-Via the ops console: navigate to `/ops/workflows` → **+ New Instance**.
-
----
-
-## Data Flow Between Steps
-
-Output from one step becomes input to the next. All values are JSON strings.
-
-```
-Workflow input:            { "orderId": 9871 }
-                                    ↓
-ReserveInventoryHandler ← input:  { "orderId": 9871 }
-                        → output: { "reservationId": "abc-123", "orderId": 9871 }
-                                    ↓
-ChargePaymentHandler    ← input:  { "reservationId": "abc-123", "orderId": 9871 }
-                        → output: { "chargeId": "ch_xyz", "orderId": 9871 }
-                                    ↓
-ShipOrderHandler        ← input:  { "chargeId": "ch_xyz", "orderId": 9871 }
-                        → output: { "trackingNumber": "1Z999AA..." }
-```
-
-**Convention:** pass through any data downstream steps will need. There is no separate "workflow context" — the output chain is the context.
-
----
+The `StepExecutionClaimer` background service picks up `Pending` and `AwaitingRetry` step executions when their scheduled time arrives.
 
 ## Recovery Operations
 
-```http
-# Retry from the last failed step (resets attempt counter to 1)
-POST /workflow-instances/{id}/retry
+When a workflow instance fails or needs intervention, the following operations are available:
 
-# Replay from step 1
-POST /workflow-instances/{id}/replay
+| Operation | Description |
+|-----------|-------------|
+| **Retry** | Resumes from the last failed step (not step 1). Creates a new step execution for the failed step and moves the instance back to `Running`. |
+| **Replay** | Restarts from step 1. Re-materializes all step executions and includes a version safety check. Moves the instance back to `Running`. |
+| **Cancel** | Terminates the workflow instance. |
+| **Archive** | Moves a terminal instance to archived state. Note: instances in `AwaitingRetry` status cannot be archived. |
 
-# Cancel a Pending or Running instance
-POST /workflow-instances/{id}/cancel
+## Placeholder Assistance
 
-# Archive a Completed or Failed instance (hides it from default list view)
-POST /workflow-instances/{id}/archive
-```
+Placeholder-capable fields in the editor use the available-fields read surface.
 
-All operations are also available from the ops console detail page.
+Current behavior:
 
----
+- The UI requests suggestions per workflow key, workflow version, and step key.
+- Suggestions are scoped to fields available up to the current step.
+- Suggestions can be inserted into URL, header, body, transform, conditional, and delay expression fields.
 
-## Checklist for a New Workflow
+The backing endpoint is:
 
-- [ ] Create `YourWorkflow.cs` in `src/StepTrail.Api/Workflows/` extending `WorkflowDescriptor`
-- [ ] Set a unique `Key`, `Version`, and ordered `Steps`
-- [ ] For each custom step, create a handler in `src/StepTrail.Worker/Handlers/` implementing `IStepHandler`
-- [ ] Steps using `HttpActivityHandler` need no custom handler — configure via `config:`
-- [ ] Reference secrets using `{{secrets.name}}` in config strings; set values via `PUT /secrets/{name}`
-- [ ] Register `AddWorkflow<YourWorkflow>()` in `src/StepTrail.Api/Program.cs`
-- [ ] Register each custom handler with `AddKeyedScoped<IStepHandler, YourHandler>(nameof(YourHandler))` in `src/StepTrail.Worker/Program.cs`
-- [ ] Restart the API (syncs definition to DB) and the Worker
-- [ ] Verify the workflow appears in `GET /workflows`
-- [ ] Start a test instance via `POST /workflow-instances` or the ops console
+- `GET /workflow-definitions/{key}/steps/{stepKey}/available-fields?version={version}`
+
+## Related APIs
+
+Authoring-related endpoints:
+
+- `GET /workflows` -- registered template descriptors
+- `GET /workflow-definitions` -- persisted workflow definitions
+- `POST /workflow-definitions/from-descriptor` -- create a workflow from a template descriptor
+- `POST /workflow-definitions/blank` -- create a blank workflow definition
+- `POST /workflow-definitions/clone` -- clone an existing workflow definition
+- `GET /workflow-definitions/{id}` -- get one workflow definition
+- `PUT /workflow-definitions/{id}/trigger-type` -- replace the current trigger type
+- `PUT /workflow-definitions/{id}/trigger` -- save trigger configuration
+- `POST /workflow-definitions/{id}/steps` -- add a step
+- `PUT /workflow-definitions/{id}/steps/{stepKey}` -- save step configuration
+- `DELETE /workflow-definitions/{id}/steps/{stepKey}` -- remove a step
+- `POST /workflow-definitions/{id}/steps/{stepKey}/move-up` -- move a step earlier
+- `POST /workflow-definitions/{id}/steps/{stepKey}/move-down` -- move a step later
+- `POST /workflow-definitions/{id}/activate` -- activate a workflow definition
+- `POST /workflow-definitions/{id}/deactivate` -- deactivate a workflow definition
+
+## Recommended Operator Flow
+
+For day-to-day use in the current UI:
+
+1. Browse templates in `/ops/templates` or start manually in `/ops/definitions/new`
+2. Edit the workflow in `/ops/definitions/edit?id={guid}`
+3. Configure the trigger
+4. Configure and order the steps
+5. Adjust per-step retry behavior if needed
+6. Activate the workflow
+7. Monitor executions in `/ops/workflows`

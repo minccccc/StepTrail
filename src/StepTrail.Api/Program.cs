@@ -384,9 +384,19 @@ ops.MapGet("/workflows", (IWorkflowRegistry registry) =>
         w.Version,
         w.Name,
         w.Description,
+        w.RecurrenceIntervalSeconds,
         Steps = w.Steps
             .OrderBy(s => s.Order)
-            .Select(s => new { s.Order, s.StepKey, s.StepType })
+            .Select(s => new
+            {
+                s.Order,
+                s.StepKey,
+                s.StepType,
+                s.MaxAttempts,
+                s.RetryDelaySeconds,
+                s.TimeoutSeconds,
+                s.Config
+            })
     });
     return Results.Ok(workflows);
 });
@@ -1519,30 +1529,25 @@ static IEnumerable<TransformValueMapping> ParseMappings(string mappingsText)
 
 static StepDefinition CreateDefaultStepDefinition(string stepKey, int order, string stepType)
 {
-    // Map legacy handler type names and canonical step types to StepDefinition factories.
-    var normalizedType = stepType.ToLowerInvariant();
+    if (Enum.TryParse<StepType>(stepType, ignoreCase: true, out var parsed))
+    {
+        return parsed switch
+        {
+            StepType.HttpRequest => StepDefinition.CreateHttpRequest(Guid.NewGuid(), stepKey, order,
+                new HttpRequestStepConfiguration("https://api.example.com/endpoint")),
+            StepType.SendWebhook => StepDefinition.CreateSendWebhook(Guid.NewGuid(), stepKey, order,
+                new SendWebhookStepConfiguration("https://hooks.example.com/outbound")),
+            StepType.Transform => StepDefinition.CreateTransform(Guid.NewGuid(), stepKey, order,
+                new TransformStepConfiguration([new TransformValueMapping("output", "{{input}}")])),
+            StepType.Conditional => StepDefinition.CreateConditional(Guid.NewGuid(), stepKey, order,
+                new ConditionalStepConfiguration("{{input.status}}", ConditionalOperator.Equals, "ready")),
+            StepType.Delay => StepDefinition.CreateDelay(Guid.NewGuid(), stepKey, order,
+                new DelayStepConfiguration(30)),
+            _ => throw new ArgumentException($"Unsupported step type '{stepType}'.", nameof(stepType))
+        };
+    }
 
-    if (normalizedType.Contains("http") && !normalizedType.Contains("webhook"))
-        return StepDefinition.CreateHttpRequest(Guid.NewGuid(), stepKey, order,
-            new HttpRequestStepConfiguration("https://api.example.com/endpoint"));
-
-    if (normalizedType.Contains("webhook") || normalizedType.Contains("sendwebhook"))
-        return StepDefinition.CreateSendWebhook(Guid.NewGuid(), stepKey, order,
-            new SendWebhookStepConfiguration("https://hooks.example.com/outbound"));
-
-    if (normalizedType.Contains("transform"))
-        return StepDefinition.CreateTransform(Guid.NewGuid(), stepKey, order,
-            new TransformStepConfiguration([new TransformValueMapping("output", "{{input}}")]));
-
-    if (normalizedType.Contains("conditional"))
-        return StepDefinition.CreateConditional(Guid.NewGuid(), stepKey, order,
-            new ConditionalStepConfiguration("{{input.status}}", ConditionalOperator.Equals, "ready"));
-
-    if (normalizedType.Contains("delay"))
-        return StepDefinition.CreateDelay(Guid.NewGuid(), stepKey, order,
-            new DelayStepConfiguration(30));
-
-    throw new ArgumentException(
-        $"Unsupported step type '{stepType}'. Supported types: HttpRequest, SendWebhook, Transform, Conditional, Delay.",
-        nameof(stepType));
+    // Unrecognized type (e.g. code-first handler name like "SendWelcomeEmailHandler") — default to HttpRequest.
+    return StepDefinition.CreateHttpRequest(Guid.NewGuid(), stepKey, order,
+        new HttpRequestStepConfiguration("https://api.example.com/endpoint"));
 }

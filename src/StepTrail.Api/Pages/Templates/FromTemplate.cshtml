@@ -22,28 +22,32 @@
         {
             @* Template summary *@
             <div class="card shadow-sm mb-4">
-                <div class="card-header fw-semibold">Template</div>
+                <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
+                    <span>Template: @Model.Template.Name</span>
+                    <span class="badge bg-light text-dark border">v@Model.Template.Version</span>
+                </div>
                 <div class="card-body">
-                    <h5 class="mb-1">@Model.Template.Name</h5>
-                    <p class="font-monospace text-muted small mb-2">
-                        @Model.Template.Key
-                        <span class="badge bg-light text-dark border ms-1">v@Model.Template.Version</span>
-                    </p>
+                    <p class="font-monospace text-muted small mb-2">@Model.Template.Key</p>
                     @if (!string.IsNullOrWhiteSpace(Model.Template.Description))
                     {
                         <p class="text-muted small mb-2">@Model.Template.Description</p>
                     }
                     @if (Model.Template.Steps.Count > 0)
                     {
-                        <div class="d-flex align-items-center gap-1 small text-muted border-top pt-2 flex-wrap">
-                            <span class="fw-semibold">Trigger</span>
+                        <div class="small border-top pt-2">
+                            <span class="fw-semibold text-muted">Steps:</span>
                             @foreach (var step in Model.Template.Steps.OrderBy(s => s.Order))
                             {
-                                <span>&rarr;</span>
-                                <span>@StepTypeLabel(step.StepType)</span>
+                                <span class="ms-1 badge bg-light text-dark border">
+                                    #@step.Order @step.StepKey
+                                    <span class="text-muted">(@StepTypeLabel(step.StepType))</span>
+                                </span>
                             }
                         </div>
                     }
+                    <div class="mt-2">
+                        <a href="/ops/templates" class="text-muted small">View full template details</a>
+                    </div>
                 </div>
             </div>
 

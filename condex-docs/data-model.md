@@ -36,6 +36,12 @@ workflow_definitions
   |
   +-- recurring_workflow_schedules (via workflow_definition_id)
 
+executable_workflow_definitions
+  |
+  +-- executable_trigger_definitions
+  |
+  +-- executable_step_definitions
+
 workflow_secrets  (standalone — referenced by name from step configs)
 ```
 
@@ -117,6 +123,75 @@ Interpretation:
 
 - this table defines the static execution plan for a workflow version
 
+### `executable_workflow_definitions`
+
+Purpose:
+
+- durable representation of an executable workflow definition, created via API or from a template
+
+Important fields:
+
+- `id` (uuid PK)
+- `key` (varchar)
+- `webhook_route_key` (varchar, nullable)
+- `name` (varchar)
+- `version` (int)
+- `status` (WorkflowDefinitionStatus: Draft/Active/Inactive/Archived)
+- `description` (varchar, nullable)
+- `source_template_key` (varchar, nullable)
+- `source_template_version` (int, nullable)
+- `created_at_utc` (timestamptz)
+- `updated_at_utc` (timestamptz)
+
+Important rule:
+
+- `(key, version)` is unique when `status = Active`
+
+Interpretation:
+
+- an executable workflow definition is a standalone, versioned workflow that can be triggered by webhooks, API calls, schedules, or manually
+- when created from a template, `source_template_key` and `source_template_version` record the origin
+
+### `executable_trigger_definitions`
+
+Purpose:
+
+- defines how an executable workflow can be triggered
+
+Important fields:
+
+- `id` (uuid PK)
+- `workflow_definition_id` (FK -> executable_workflow_definitions)
+- `type` (TriggerType: Webhook/Manual/Api/Schedule)
+- `configuration` (jsonb) -- type-specific config
+
+Interpretation:
+
+- each executable workflow definition can have one or more trigger definitions
+- the `configuration` column holds trigger-type-specific settings (e.g. webhook path, cron expression)
+
+### `executable_step_definitions`
+
+Purpose:
+
+- ordered steps belonging to an executable workflow definition
+
+Important fields:
+
+- `id` (uuid PK)
+- `workflow_definition_id` (FK -> executable_workflow_definitions)
+- `key` (varchar)
+- `order` (int)
+- `type` (StepType: HttpRequest/SendWebhook/Transform/Conditional/Delay)
+- `configuration` (jsonb) -- type-specific config
+- `retry_policy_override_key` (varchar, nullable)
+- `retry_policy_json` (varchar, nullable)
+
+Interpretation:
+
+- defines the static execution plan for an executable workflow version
+- `retry_policy_override_key` references a named retry policy; `retry_policy_json` allows inline override
+
 ### `workflow_instances`
 
 Purpose:
@@ -127,10 +202,14 @@ Important fields:
 
 - `tenant_id`
 - `workflow_definition_id`
+- `executable_workflow_definition_id` (uuid, nullable FK -> executable_workflow_definitions)
+- `workflow_definition_key` (varchar, nullable)
+- `workflow_definition_version` (int, nullable)
 - `external_key`
 - `idempotency_key`
 - `status`
 - `input`
+- `trigger_data` (jsonb, nullable)
 - `created_at`
 - `updated_at`
 - `completed_at`
@@ -138,6 +217,8 @@ Important fields:
 Interpretation:
 
 - this is the parent row for execution state
+- instances may belong to a code-first `workflow_definition_id` or an executable `executable_workflow_definition_id`, but not both
+- `trigger_data` captures the payload or context from the trigger that started the instance
 
 ### `workflow_step_executions`
 
@@ -149,16 +230,22 @@ Important fields:
 
 - `workflow_instance_id`
 - `workflow_definition_step_id`
+- `executable_step_definition_id` (uuid, nullable FK -> executable_step_definitions)
 - `step_key`
+- `step_order` (int, nullable)
+- `step_type` (varchar, nullable)
+- `step_configuration` (jsonb, nullable)
 - `status`
 - `attempt`
 - `input`
-- `output` — populated on success; also populated on `HttpActivityHandler` failure with the HTTP response (status + body)
+- `output` -- populated on success; also populated on `HttpActivityHandler` failure with the HTTP response (status + body)
 - `error`
-- `scheduled_at` — gating field: worker only claims rows where `scheduled_at <= now`
+- `retry_policy_json` (varchar, nullable)
+- `failure_classification` (varchar, nullable)
+- `scheduled_at` -- gating field: worker only claims rows where `scheduled_at <= now`
 - `locked_at`
 - `locked_by`
-- `lock_expires_at` — renewed by `StepLeaseRenewer` while handler is running; used by orphan detection
+- `lock_expires_at` -- renewed by `StepLeaseRenewer` while handler is running; used by orphan detection
 - `started_at`
 - `completed_at`
 - `created_at`
@@ -167,7 +254,9 @@ Important fields:
 Important design points:
 
 - retries and replay append new rows instead of erasing prior rows
-- `lock_expires_at` is the heartbeat anchor for orphan detection — if it lapses, the execution may be recovered
+- `lock_expires_at` is the heartbeat anchor for orphan detection -- if it lapses, the execution may be recovered
+- for executable workflows, `step_configuration` and `retry_policy_json` are snapshotted at execution creation time so the execution is self-contained
+- `failure_classification` records why a step failed (see StepExecutionFailureClassification enum)
 
 This table is the heart of the runtime engine.
 
@@ -218,13 +307,15 @@ Purpose:
 
 Important fields:
 
-- `workflow_definition_id` — unique; one schedule per definition
+- `workflow_definition_id` -- unique; one schedule per definition
+- `executable_workflow_key` (varchar, nullable) -- for executable definition schedules
 - `tenant_id`
 - `interval_seconds`
-- `is_enabled` — disabling pauses dispatch without deleting the schedule
-- `input` — optional; forwarded to each new instance as workflow input
+- `cron_expression` (varchar, nullable) -- alternative to interval_seconds
+- `is_enabled` -- disabling pauses dispatch without deleting the schedule
+- `input` -- optional; forwarded to each new instance as workflow input
 - `last_run_at`
-- `next_run_at` — gating field for dispatcher; advanced by `interval_seconds` after each fire
+- `next_run_at` -- gating field for dispatcher; advanced by `interval_seconds` or cron after each fire
 
 Index:
 
@@ -257,20 +348,42 @@ Interpretation:
 
 ### Workflow instance statuses
 
-- `Pending` — created, not yet claimed by the worker
-- `Running` — at least one step has been started
-- `Completed` — all steps completed successfully
-- `Failed` — a step exhausted all retry attempts
-- `Cancelled` — manually cancelled before completion
-- `Archived` — manually archived after completion or failure; hidden from default list view
+- `Pending` -- created, not yet claimed by the worker
+- `Running` -- at least one step has been started
+- `AwaitingRetry` -- a step failed but a retry is scheduled; the instance is waiting for the next attempt
+- `Completed` -- all steps completed successfully
+- `Failed` -- a step exhausted all retry attempts
+- `Cancelled` -- manually cancelled before completion
+- `Archived` -- manually archived after completion or failure; hidden from default list view
 
 ### Workflow step execution statuses
 
-- `Pending` — waiting to be claimed
-- `Running` — currently claimed and executing
-- `Completed` — handler succeeded
-- `Failed` — handler failed (including timeouts and orphans)
-- `Cancelled` — step was cancelled as part of a workflow cancel operation
+- `NotStarted` -- created but not yet eligible for claiming (e.g. waiting for a preceding step)
+- `Pending` -- waiting to be claimed
+- `Waiting` -- execution is paused, waiting for an external condition or delay
+- `Running` -- currently claimed and executing
+- `Completed` -- handler succeeded
+- `Failed` -- handler failed (including timeouts and orphans)
+- `Cancelled` -- step was cancelled as part of a workflow cancel operation
+
+### WorkflowDefinitionStatus
+
+- `Draft` -- definition is being authored, not yet runnable
+- `Active` -- definition is live and can be triggered
+- `Inactive` -- definition is paused; existing instances continue but new triggers are rejected
+- `Archived` -- definition is retired and hidden from default views
+
+### StepExecutionFailureClassification
+
+- `TransientFailure` -- temporary issue (e.g. network timeout, 5xx response); eligible for retry
+- `PermanentFailure` -- non-recoverable error (e.g. 4xx response, business logic rejection)
+- `InvalidConfiguration` -- step configuration is malformed or references missing resources
+- `InputResolutionFailure` -- step input could not be resolved (e.g. missing placeholder value, secret not found)
+
+### BackoffStrategy
+
+- `Fixed` -- retry delay is constant across attempts
+- `Exponential` -- retry delay doubles (or increases by a configurable factor) with each attempt
 
 ## Event Types
 
@@ -298,6 +411,9 @@ Static metadata:
 
 - `workflow_definitions`
 - `workflow_definition_steps`
+- `executable_workflow_definitions`
+- `executable_trigger_definitions`
+- `executable_step_definitions`
 - `workflow_secrets`
 
 Runtime state:

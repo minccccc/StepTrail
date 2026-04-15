@@ -2,37 +2,47 @@
 
 This folder is the code-aligned documentation set for the current StepTrail solution.
 
-It describes the implementation that exists today, including the PBI-11 through PBI-20 additions:
+It describes the implementation that exists today, including:
 
-- step timeouts and orphan recovery
-- lease renewal and heartbeat-style lock extension
-- delayed execution through `scheduled_at`
-- recurring workflow dispatch
-- webhook-triggered starts
-- HTTP activity steps
-- secret resolution
-- operational alerts
-- basic ops authentication
-- the first packaged workflow template
+- template catalog and workflow-definition authoring
+- manual workflow creation and template-based creation
+- executable trigger and step configuration
+- retry, replay, cancel, and archive operations
+- workflow instance trail and operations UI
+- webhook, API, manual, and schedule trigger paths
+- delay and retry waiting behavior
+- secrets and placeholder resolution
+- retry policy model with configurable backoff strategies
+- failure classification for step executions
+- AwaitingRetry workflow instance status
+- structured trail view with attempt history
+- workflow definition CRUD (create, edit, activate/deactivate, clone)
+- three-level UX model: Templates, Workflow Definitions, Instances
+- all trigger types: Webhook, Manual, API, Schedule
+- all step types: HttpRequest, SendWebhook, Transform, Conditional, Delay
+- source template tracking on definitions
+- comprehensive test suite with Testcontainers
 
-These docs intentionally stay close to the code. Where behavior is still limited or incomplete, that is called out explicitly instead of being described as a finished capability.
+These docs intentionally stay close to the current codebase. Where behavior is still limited or intentionally transitional, that is called out explicitly.
 
 ## Recommended Reading Order
 
 1. `architecture-overview.md`
-   Best starting point. Explains the system shape, project responsibilities, and architectural style.
-2. `runtime-and-lifecycle.md`
-   Follows a workflow from registration through triggering, worker execution, retries, recurring dispatch, and operator actions.
-3. `data-model.md`
-   Describes the persistence model, including recurring schedules and workflow secrets.
-4. `api-and-integration.md`
-   Summarizes the public webhook surface, protected ops API, cookie auth, and packaged template flow.
-5. `development-runbook.md`
-   Covers local startup, configuration, operational checks, and current caveats.
+   Best starting point for the current runtime shape and project responsibilities.
+2. `api-and-integration.md`
+   Best entry point for routes, authoring endpoints, trigger endpoints, and the operations console surface.
+3. `runtime-and-lifecycle.md`
+   Follows how workflows are started, executed, retried, waited, and recovered.
+4. `development-runbook.md`
+   Covers local startup, useful URLs, testing, and current caveats.
 
 ## Quick Summary
 
-StepTrail is a database-backed workflow engine built as a modular monolith.
+StepTrail is a database-backed workflow engine with three top-level product concepts:
+
+- **Templates** - code-registered workflow blueprints shown in the Templates catalog
+- **Workflows** - persisted executable workflow definitions owned by the user/system
+- **Workflow Instances** - concrete executions of workflows
 
 At runtime it consists of:
 
@@ -42,52 +52,55 @@ At runtime it consists of:
 
 The API host is responsible for:
 
-- protected operations UI and ops API
-- public webhook trigger endpoint
-- workflow registration and metadata sync
-- workflow start / retry / replay / cancel / archive commands
-- read-side instance and timeline queries
-- secrets management endpoints
+- the protected operations UI and ops API
+- template catalog and workflow authoring flows
+- template catalog UI at /ops/templates with configuration previews
+- public trigger endpoints
+- workflow definition CRUD and activation
+- workflow activation and lifecycle commands
+- read-side queries for workflows and workflow instances
+- structured trail queries with attempt history
+- secrets management
 
 The worker host is responsible for:
 
-- polling for due step executions
-- claiming work safely from the database
-- renewing execution leases while handlers run
-- recovering orphaned executions whose locks expired
-- executing step handlers
-- scheduling retries and next steps
-- dispatching recurring workflow schedules
-- sending alerts for workflow failures and orphan recovery
+- polling for due executions
+- claiming and processing step executions
+- retries and waiting semantics
+- failure classification for step execution outcomes
+- retry policy resolution with configurable backoff
+- recurring dispatch
+- orphan recovery
 
-The database is the shared source of truth for:
+The database is the source of truth for:
 
-- workflow definitions and steps
-- workflow instances and step executions
-- idempotency records
-- workflow events / timeline
-- recurring workflow schedules
-- workflow secrets
+- workflow definitions
+- workflow instances
+- step executions and attempt history
+- events and trail data
+- schedules
+- secrets
 
-## Built-In Workflows
+## Current Built-In Templates
 
-The solution currently ships with two code-first workflows:
+The solution currently ships with two code-registered templates:
 
 - `user-onboarding`
 - `webhook-to-http-call`
 
-The second one is the first packaged template exposed in the operations UI.
+These appear in `/ops/templates` with full configuration previews and can be turned into editable workflow definitions through the **Use Template** flow. Users can also create workflow definitions manually from scratch without starting from a template.
 
 ## Important Current Caveats
 
-- timeout handling is strongest when handlers cooperate with `CancellationToken`; a truly hung, non-cooperative handler can still remain `Running`
-- secrets are stored in plaintext in the database
-- the operations console uses basic app-configured credentials and should be overridden outside local development
-- there are still no automated test projects in the solution
+- template descriptors currently provide the ordered step shape; trigger type is chosen when the user instantiates the template
+- manual workflow creation is available, but workflow definitions still require at least one persisted step definition
+- replay behavior is still evolving and should be treated as an active area of refinement
+- secrets are stored in the database and should be handled accordingly for non-local deployments
+- the operations console uses app-configured credentials and must be hardened outside local development
 
 ## Intended Audience
 
-- developers onboarding to the solution
-- reviewers trying to understand the current runtime behavior
-- maintainers planning refactors without losing existing behavior
-- future UI work that needs a clear backend mental model
+- developers onboarding to the codebase
+- maintainers updating the workflow engine and authoring model
+- reviewers validating runtime and operations behavior
+- future UI work that needs an accurate mental model of Templates, Workflows, and Workflow Instances
