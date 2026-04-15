@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using StepTrail.Shared;
@@ -19,8 +20,7 @@ namespace StepTrail.Worker;
 /// </summary>
 public sealed class StepExecutionProcessor
 {
-    private const int DefaultExecutableMaxAttempts = 3;
-    private const int DefaultExecutableRetryDelaySeconds = 10;
+    private static readonly RetryPolicy DefaultRetryPolicy = RetryPolicy.Default;
 
     private readonly StepTrailDbContext _db;
     private readonly IServiceProvider _serviceProvider;
@@ -68,6 +68,7 @@ public sealed class StepExecutionProcessor
         string? output = null;
         string? error = null;
         bool timedOut = false;
+        StepExecutionFailureClassification? failureClassification = null;
         var continuation = StepExecutionContinuation.ContinueWorkflow;
         DateTimeOffset? resumeAtUtc = null;
 
@@ -122,6 +123,7 @@ public sealed class StepExecutionProcessor
                 {
                     output = result.Output;
                     error = result.Failure!.Message;
+                    failureClassification = result.Failure.Classification;
 
                     _logger.LogWarning(
                         "Step {StepKey} (execution {ExecutionId}) returned classified failure {Classification}: {Message}",
@@ -168,9 +170,10 @@ public sealed class StepExecutionProcessor
                 now,
                 ct,
                 output,
-                runtimeDefinition.MaxAttempts,
-                runtimeDefinition.RetryDelaySeconds,
-                runtimeDefinition.WorkflowKey);
+                runtimeDefinition.RetryPolicy,
+                runtimeDefinition.WorkflowKey,
+                failureClassification,
+                timedOut);
     }
 
     private async Task PersistSuccessAsync(
@@ -394,8 +397,11 @@ public sealed class StepExecutionProcessor
                 stepDef.StepType,
                 stepDef.Config,
                 stepDef.Order,
-                MaxAttempts: stepDef.MaxAttempts,
-                RetryDelaySeconds: stepDef.RetryDelaySeconds,
+                RetryPolicy: new RetryPolicy(
+                    stepDef.MaxAttempts,
+                    stepDef.RetryDelaySeconds,
+                    BackoffStrategy.Fixed,
+                    retryOnTimeout: true),
                 TimeoutSeconds: stepDef.TimeoutSeconds,
                 WorkflowKey: instance.WorkflowDefinitionKey ?? await ResolveLegacyWorkflowKeyAsync(stepDef.WorkflowDefinitionId, ct),
                 WorkflowVersion: instance.WorkflowDefinitionVersion,
@@ -413,13 +419,13 @@ public sealed class StepExecutionProcessor
 
         var resolvedExecutor = _stepExecutorRegistry.Resolve(stepType, execution.StepConfiguration);
 
+        var effectivePolicy = ResolveEffectiveRetryPolicy(execution);
+
         return new ResolvedStepExecutionDefinition(
             resolvedExecutor.ExecutorKey,
             resolvedExecutor.StepConfiguration,
             execution.StepOrder.Value,
-            // Temporary executable-step defaults until Phase 6 introduces full retry policy handling.
-            MaxAttempts: DefaultExecutableMaxAttempts,
-            RetryDelaySeconds: DefaultExecutableRetryDelaySeconds,
+            RetryPolicy: effectivePolicy,
             TimeoutSeconds: null,
             WorkflowKey: instance.WorkflowDefinitionKey ?? execution.WorkflowInstanceId.ToString(),
             WorkflowVersion: instance.WorkflowDefinitionVersion,
@@ -454,6 +460,32 @@ public sealed class StepExecutionProcessor
         return (state, secrets);
     }
 
+    /// <summary>
+    /// Resolves the effective retry policy for an executable step execution.
+    /// Snapshotted per-step policy → global default.
+    /// </summary>
+    private static RetryPolicy ResolveEffectiveRetryPolicy(WorkflowStepExecution execution)
+    {
+        if (!string.IsNullOrWhiteSpace(execution.RetryPolicyJson))
+        {
+            try
+            {
+                var policy = JsonSerializer.Deserialize<RetryPolicy>(
+                    execution.RetryPolicyJson,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+                if (policy is not null)
+                    return policy;
+            }
+            catch (JsonException)
+            {
+                // Fall through to default if deserialization fails
+            }
+        }
+
+        return DefaultRetryPolicy;
+    }
+
     private async Task<string> ResolveLegacyWorkflowKeyAsync(Guid workflowDefinitionId, CancellationToken ct)
     {
         var definition = await _db.WorkflowDefinitions.FindAsync([workflowDefinitionId], ct);
@@ -464,8 +496,7 @@ public sealed class StepExecutionProcessor
         string ExecutorKey,
         string? Config,
         int StepOrder,
-        int MaxAttempts,
-        int RetryDelaySeconds,
+        RetryPolicy RetryPolicy,
         int? TimeoutSeconds,
         string WorkflowKey,
         int? WorkflowVersion,

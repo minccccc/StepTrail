@@ -24,6 +24,9 @@ public class ExecutableStepDefinitionRecordConfiguration : IEntityTypeConfigurat
         builder.Property(step => step.RetryPolicyOverrideKey)
             .HasColumnName("retry_policy_override_key")
             .HasMaxLength(200);
+        builder.Property(step => step.RetryPolicyJson)
+            .HasColumnName("retry_policy_json")
+            .HasColumnType("jsonb");
 
         builder.HasIndex(step => new { step.WorkflowDefinitionId, step.Key }).IsUnique();
         builder.HasIndex(step => new { step.WorkflowDefinitionId, step.Order }).IsUnique();

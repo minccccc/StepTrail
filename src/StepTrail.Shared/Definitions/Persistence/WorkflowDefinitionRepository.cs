@@ -326,6 +326,7 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
             Order = stepDefinition.Order,
             Type = stepDefinition.Type,
             RetryPolicyOverrideKey = stepDefinition.RetryPolicyOverrideKey,
+            RetryPolicyJson = SerializeRetryPolicy(stepDefinition.RetryPolicy),
             Configuration = SerializeStepConfiguration(stepDefinition)
         };
 
@@ -368,41 +369,50 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
             _ => throw new InvalidOperationException($"Unsupported trigger type '{record.Type}'.")
         };
 
-    private static StepDefinition MapToDomain(ExecutableStepDefinitionRecord record) =>
-        record.Type switch
+    private static StepDefinition MapToDomain(ExecutableStepDefinitionRecord record)
+    {
+        var retryPolicy = DeserializeRetryPolicy(record.RetryPolicyJson);
+
+        return record.Type switch
         {
             StepType.HttpRequest => StepDefinition.CreateHttpRequest(
                 record.Id,
                 record.Key,
                 record.Order,
                 DeserializeHttpRequestStepConfiguration(record.Configuration),
-                record.RetryPolicyOverrideKey),
+                record.RetryPolicyOverrideKey,
+                retryPolicy),
             StepType.Transform => StepDefinition.CreateTransform(
                 record.Id,
                 record.Key,
                 record.Order,
                 DeserializeTransformStepConfiguration(record.Configuration),
-                record.RetryPolicyOverrideKey),
+                record.RetryPolicyOverrideKey,
+                retryPolicy),
             StepType.Conditional => StepDefinition.CreateConditional(
                 record.Id,
                 record.Key,
                 record.Order,
                 DeserializeConditionalStepConfiguration(record.Configuration),
-                record.RetryPolicyOverrideKey),
+                record.RetryPolicyOverrideKey,
+                retryPolicy),
             StepType.Delay => StepDefinition.CreateDelay(
                 record.Id,
                 record.Key,
                 record.Order,
                 DeserializeDelayStepConfiguration(record.Configuration),
-                record.RetryPolicyOverrideKey),
+                record.RetryPolicyOverrideKey,
+                retryPolicy),
             StepType.SendWebhook => StepDefinition.CreateSendWebhook(
                 record.Id,
                 record.Key,
                 record.Order,
                 DeserializeSendWebhookStepConfiguration(record.Configuration),
-                record.RetryPolicyOverrideKey),
+                record.RetryPolicyOverrideKey,
+                retryPolicy),
             _ => throw new InvalidOperationException($"Unsupported step type '{record.Type}'.")
         };
+    }
 
     private static string SerializeTriggerConfiguration(TriggerDefinition triggerDefinition) =>
         triggerDefinition.Type switch
@@ -672,5 +682,48 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
         public Dictionary<string, string>? Headers { get; set; }
         public string? Body { get; set; }
         public int? TimeoutSeconds { get; set; }
+    }
+
+    private static string? SerializeRetryPolicy(RetryPolicy? retryPolicy) =>
+        retryPolicy is null
+            ? null
+            : JsonSerializer.Serialize(
+                new RetryPolicyDto
+                {
+                    MaxAttempts = retryPolicy.MaxAttempts,
+                    InitialDelaySeconds = retryPolicy.InitialDelaySeconds,
+                    BackoffStrategy = retryPolicy.BackoffStrategy.ToString(),
+                    RetryOnTimeout = retryPolicy.RetryOnTimeout,
+                    MaxDelaySeconds = retryPolicy.MaxDelaySeconds
+                },
+                JsonSerializerOptions);
+
+    private static RetryPolicy? DeserializeRetryPolicy(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        var dto = JsonSerializer.Deserialize<RetryPolicyDto>(json, JsonSerializerOptions);
+        if (dto is null)
+            return null;
+
+        if (!Enum.TryParse<BackoffStrategy>(dto.BackoffStrategy, ignoreCase: true, out var backoff))
+            backoff = BackoffStrategy.Fixed;
+
+        return new RetryPolicy(
+            dto.MaxAttempts,
+            dto.InitialDelaySeconds,
+            backoff,
+            dto.RetryOnTimeout,
+            dto.MaxDelaySeconds);
+    }
+
+    private sealed class RetryPolicyDto
+    {
+        public int MaxAttempts { get; set; }
+        public int InitialDelaySeconds { get; set; }
+        public string BackoffStrategy { get; set; } = "Fixed";
+        public bool RetryOnTimeout { get; set; } = true;
+        public int? MaxDelaySeconds { get; set; }
     }
 }

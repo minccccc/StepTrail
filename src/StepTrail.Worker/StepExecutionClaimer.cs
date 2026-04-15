@@ -61,9 +61,9 @@ public sealed class StepExecutionClaimer
             execution.StartedAt ??= now;
             execution.UpdatedAt = now;
 
-            // Transition parent instance: Pending → Running (first time only)
+            // Transition parent instance: Pending or AwaitingRetry → Running
             var instance = await _db.WorkflowInstances.FindAsync([execution.WorkflowInstanceId], ct);
-            if (instance is not null && instance.Status == WorkflowInstanceStatus.Pending)
+            if (instance is not null && instance.Status is WorkflowInstanceStatus.Pending or WorkflowInstanceStatus.AwaitingRetry)
             {
                 instance.Status = WorkflowInstanceStatus.Running;
                 instance.UpdatedAt = now;

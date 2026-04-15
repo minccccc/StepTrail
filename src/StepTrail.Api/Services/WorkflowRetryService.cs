@@ -70,6 +70,7 @@ public sealed class WorkflowRetryService
                 StepType = failedExecution.StepType,
                 StepConfiguration = failedExecution.StepConfiguration,
                 RetryPolicyOverrideKey = failedExecution.RetryPolicyOverrideKey,
+                RetryPolicyJson = failedExecution.RetryPolicyJson,
                 Status = WorkflowStepExecutionStatus.Pending,
                 Attempt = 1,
                 Input = failedExecution.Input,
@@ -89,6 +90,14 @@ public sealed class WorkflowRetryService
                 WorkflowInstanceId = instanceId,
                 StepExecutionId = newExecution.Id,
                 EventType = WorkflowEventTypes.WorkflowRetried,
+                Payload = JsonSerializer.Serialize(new
+                {
+                    origin = "manual",
+                    stepKey = failedExecution.StepKey,
+                    previousAttempt = failedExecution.Attempt,
+                    previousFailureClassification = failedExecution.FailureClassification,
+                    newAttempt = newExecution.Attempt
+                }, JsonSerializerOptions),
                 CreatedAt = now
             });
 
@@ -133,6 +142,11 @@ public sealed class WorkflowRetryService
 
             var now = DateTimeOffset.UtcNow;
 
+            // Count prior executions before creating new ones (for replay metadata).
+            var priorExecutionCount = await _db.WorkflowStepExecutions
+                .Where(e => e.WorkflowInstanceId == instanceId)
+                .CountAsync(ct);
+
             var newExecutions = instance.ExecutableWorkflowDefinitionId.HasValue
                 ? await MaterializeExecutableReplayExecutionsAsync(instance, now, ct)
                 : await MaterializeLegacyReplayExecutionsAsync(instance, now, ct);
@@ -141,6 +155,8 @@ public sealed class WorkflowRetryService
                 .OrderBy(execution => execution.StepOrder ?? int.MaxValue)
                 .ThenBy(execution => execution.CreatedAt)
                 .First();
+
+            var previousStatus = instance.Status;
 
             instance.Status = WorkflowInstanceStatus.Running;
             instance.CompletedAt = null;
@@ -153,6 +169,14 @@ public sealed class WorkflowRetryService
                 WorkflowInstanceId = instanceId,
                 StepExecutionId = firstExecution.Id,
                 EventType = WorkflowEventTypes.WorkflowReplayed,
+                Payload = JsonSerializer.Serialize(new
+                {
+                    origin = "manual",
+                    definitionVersion = instance.WorkflowDefinitionVersion,
+                    previousStatus = previousStatus.ToString(),
+                    priorExecutionCount,
+                    newStepCount = newExecutions.Count
+                }, JsonSerializerOptions),
                 CreatedAt = now
             });
 
@@ -190,9 +214,9 @@ public sealed class WorkflowRetryService
                 ?? throw new WorkflowInstanceNotFoundException(
                     $"Workflow instance '{instanceId}' not found.");
 
-            if (instance.Status == WorkflowInstanceStatus.Running)
+            if (instance.Status is WorkflowInstanceStatus.Running or WorkflowInstanceStatus.AwaitingRetry)
                 throw new InvalidWorkflowStateException(
-                    "Cannot archive a Running instance. Cancel it first.");
+                    $"Cannot archive a {instance.Status} instance. Cancel it first.");
 
             if (instance.Status == WorkflowInstanceStatus.Archived)
                 throw new InvalidWorkflowStateException(
@@ -316,6 +340,18 @@ public sealed class WorkflowRetryService
             ?? throw new InvalidOperationException(
                 $"Executable workflow definition '{instance.ExecutableWorkflowDefinitionId}' not found for replay.");
 
+        // Safety rule: replay must use the same definition version the instance was started with.
+        // Block replay if the definition has been replaced with a different version since start time.
+        if (instance.WorkflowDefinitionVersion.HasValue
+            && executableDefinition.Version != instance.WorkflowDefinitionVersion.Value)
+        {
+            throw new InvalidWorkflowStateException(
+                $"Cannot replay workflow instance '{instance.Id}': " +
+                $"instance was started with definition version {instance.WorkflowDefinitionVersion.Value}, " +
+                $"but the stored definition is now version {executableDefinition.Version}. " +
+                "Replay must use the original definition version.");
+        }
+
         instance.WorkflowDefinitionKey ??= executableDefinition.Key;
         instance.WorkflowDefinitionVersion ??= executableDefinition.Version;
 
@@ -331,6 +367,9 @@ public sealed class WorkflowRetryService
                 StepType = step.Type.ToString(),
                 StepConfiguration = SerializeStepConfiguration(step),
                 RetryPolicyOverrideKey = step.RetryPolicyOverrideKey,
+                RetryPolicyJson = step.RetryPolicy is not null
+                    ? JsonSerializer.Serialize(step.RetryPolicy, JsonSerializerOptions)
+                    : null,
                 Status = index == 0
                     ? WorkflowStepExecutionStatus.Pending
                     : WorkflowStepExecutionStatus.NotStarted,

@@ -9,6 +9,7 @@ public class ExecutableStepDefinitionRecord
     public StepType Type { get; set; }
     public string Configuration { get; set; } = string.Empty;
     public string? RetryPolicyOverrideKey { get; set; }
+    public string? RetryPolicyJson { get; set; }
 
     public ExecutableWorkflowDefinitionRecord WorkflowDefinition { get; set; } = null!;
 }

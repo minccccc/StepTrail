@@ -358,6 +358,7 @@ public sealed class WorkflowStartService
             StepType = stepDefinition.Type.ToString(),
             StepConfiguration = SerializeStepConfiguration(stepDefinition),
             RetryPolicyOverrideKey = stepDefinition.RetryPolicyOverrideKey,
+            RetryPolicyJson = SerializeRetryPolicy(stepDefinition.RetryPolicy),
             Status = isFirstStep ? WorkflowStepExecutionStatus.Pending : WorkflowStepExecutionStatus.NotStarted,
             Attempt = 1,
             Input = isFirstStep ? inputJson : null,
@@ -376,6 +377,9 @@ public sealed class WorkflowStartService
             StepType.SendWebhook => JsonSerializer.Serialize(stepDefinition.SendWebhookConfiguration!, JsonSerializerOptions),
             _ => throw new InvalidOperationException($"Unsupported step type '{stepDefinition.Type}'.")
         };
+
+    private static string? SerializeRetryPolicy(RetryPolicy? retryPolicy) =>
+        retryPolicy is null ? null : JsonSerializer.Serialize(retryPolicy, JsonSerializerOptions);
 
     private static WorkflowStartResult MapToResult(
         WorkflowInstance instance,

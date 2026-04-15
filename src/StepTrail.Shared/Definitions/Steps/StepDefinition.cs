@@ -22,7 +22,8 @@ public sealed class StepDefinition
         ConditionalStepConfiguration? conditionalConfiguration = null,
         DelayStepConfiguration? delayConfiguration = null,
         SendWebhookStepConfiguration? sendWebhookConfiguration = null,
-        string? retryPolicyOverrideKey = null)
+        string? retryPolicyOverrideKey = null,
+        RetryPolicy? retryPolicy = null)
     {
         if (id == Guid.Empty)
             throw new ArgumentException("Step definition id must not be empty.", nameof(id));
@@ -43,6 +44,7 @@ public sealed class StepDefinition
         RetryPolicyOverrideKey = string.IsNullOrWhiteSpace(retryPolicyOverrideKey)
             ? null
             : retryPolicyOverrideKey.Trim();
+        RetryPolicy = retryPolicy;
 
         ValidateConfiguration(type, httpRequestConfiguration, transformConfiguration, conditionalConfiguration, delayConfiguration, sendWebhookConfiguration);
     }
@@ -52,6 +54,12 @@ public sealed class StepDefinition
     public int Order { get; private set; }
     public StepType Type { get; private set; }
     public string? RetryPolicyOverrideKey { get; private set; }
+
+    /// <summary>
+    /// Optional per-step retry policy. When null, the global default applies.
+    /// </summary>
+    public RetryPolicy? RetryPolicy { get; private set; }
+
     public HttpRequestStepConfiguration? HttpRequestConfiguration { get; private set; }
     public TransformStepConfiguration? TransformConfiguration { get; private set; }
     public ConditionalStepConfiguration? ConditionalConfiguration { get; private set; }
@@ -63,7 +71,8 @@ public sealed class StepDefinition
         string key,
         int order,
         HttpRequestStepConfiguration configuration,
-        string? retryPolicyOverrideKey = null)
+        string? retryPolicyOverrideKey = null,
+        RetryPolicy? retryPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
@@ -73,7 +82,8 @@ public sealed class StepDefinition
             order,
             StepType.HttpRequest,
             httpRequestConfiguration: configuration,
-            retryPolicyOverrideKey: retryPolicyOverrideKey);
+            retryPolicyOverrideKey: retryPolicyOverrideKey,
+            retryPolicy: retryPolicy);
     }
 
     public static StepDefinition CreateTransform(
@@ -81,7 +91,8 @@ public sealed class StepDefinition
         string key,
         int order,
         TransformStepConfiguration configuration,
-        string? retryPolicyOverrideKey = null)
+        string? retryPolicyOverrideKey = null,
+        RetryPolicy? retryPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
@@ -91,7 +102,8 @@ public sealed class StepDefinition
             order,
             StepType.Transform,
             transformConfiguration: configuration,
-            retryPolicyOverrideKey: retryPolicyOverrideKey);
+            retryPolicyOverrideKey: retryPolicyOverrideKey,
+            retryPolicy: retryPolicy);
     }
 
     public static StepDefinition CreateConditional(
@@ -99,7 +111,8 @@ public sealed class StepDefinition
         string key,
         int order,
         ConditionalStepConfiguration configuration,
-        string? retryPolicyOverrideKey = null)
+        string? retryPolicyOverrideKey = null,
+        RetryPolicy? retryPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
@@ -109,7 +122,8 @@ public sealed class StepDefinition
             order,
             StepType.Conditional,
             conditionalConfiguration: configuration,
-            retryPolicyOverrideKey: retryPolicyOverrideKey);
+            retryPolicyOverrideKey: retryPolicyOverrideKey,
+            retryPolicy: retryPolicy);
     }
 
     public static StepDefinition CreateDelay(
@@ -117,7 +131,8 @@ public sealed class StepDefinition
         string key,
         int order,
         DelayStepConfiguration configuration,
-        string? retryPolicyOverrideKey = null)
+        string? retryPolicyOverrideKey = null,
+        RetryPolicy? retryPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
@@ -127,7 +142,8 @@ public sealed class StepDefinition
             order,
             StepType.Delay,
             delayConfiguration: configuration,
-            retryPolicyOverrideKey: retryPolicyOverrideKey);
+            retryPolicyOverrideKey: retryPolicyOverrideKey,
+            retryPolicy: retryPolicy);
     }
 
     public static StepDefinition CreateSendWebhook(
@@ -135,7 +151,8 @@ public sealed class StepDefinition
         string key,
         int order,
         SendWebhookStepConfiguration configuration,
-        string? retryPolicyOverrideKey = null)
+        string? retryPolicyOverrideKey = null,
+        RetryPolicy? retryPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
@@ -145,7 +162,8 @@ public sealed class StepDefinition
             order,
             StepType.SendWebhook,
             sendWebhookConfiguration: configuration,
-            retryPolicyOverrideKey: retryPolicyOverrideKey);
+            retryPolicyOverrideKey: retryPolicyOverrideKey,
+            retryPolicy: retryPolicy);
     }
 
     private static void ValidateConfiguration(

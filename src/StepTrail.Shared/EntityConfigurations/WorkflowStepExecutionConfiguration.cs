@@ -20,11 +20,13 @@ public class WorkflowStepExecutionConfiguration : IEntityTypeConfiguration<Workf
         builder.Property(e => e.StepType).HasColumnName("step_type").HasMaxLength(50);
         builder.Property(e => e.StepConfiguration).HasColumnName("step_configuration").HasColumnType("jsonb");
         builder.Property(e => e.RetryPolicyOverrideKey).HasColumnName("retry_policy_override_key").HasMaxLength(200);
+        builder.Property(e => e.RetryPolicyJson).HasColumnName("retry_policy_json").HasColumnType("jsonb");
         builder.Property(e => e.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(50).IsRequired();
         builder.Property(e => e.Attempt).HasColumnName("attempt").IsRequired();
         builder.Property(e => e.Input).HasColumnName("input").HasColumnType("jsonb");
         builder.Property(e => e.Output).HasColumnName("output").HasColumnType("jsonb");
         builder.Property(e => e.Error).HasColumnName("error");
+        builder.Property(e => e.FailureClassification).HasColumnName("failure_classification").HasMaxLength(50);
         builder.Property(e => e.ScheduledAt).HasColumnName("scheduled_at").IsRequired();
         builder.Property(e => e.LockedAt).HasColumnName("locked_at");
         builder.Property(e => e.LockedBy).HasColumnName("locked_by").HasMaxLength(200);

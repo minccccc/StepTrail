@@ -16,6 +16,12 @@ public class WorkflowStepExecution
     public string? StepConfiguration { get; set; }
     public string? RetryPolicyOverrideKey { get; set; }
 
+    /// <summary>
+    /// Snapshotted retry policy JSON. Captured at workflow start time from the step definition.
+    /// Null for legacy steps (which use WorkflowDefinitionStep.MaxAttempts/RetryDelaySeconds).
+    /// </summary>
+    public string? RetryPolicyJson { get; set; }
+
     public WorkflowStepExecutionStatus Status { get; set; }
 
     /// <summary>
@@ -37,6 +43,13 @@ public class WorkflowStepExecution
     /// Error message captured on failure.
     /// </summary>
     public string? Error { get; set; }
+
+    /// <summary>
+    /// Normalized failure classification (e.g. TransientFailure, PermanentFailure).
+    /// Null when the step has not failed. Used by the retry policy to decide whether
+    /// the failure is retryable.
+    /// </summary>
+    public string? FailureClassification { get; set; }
 
     /// <summary>
     /// When this execution is eligible to be picked up by a worker.

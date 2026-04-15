@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using StepTrail.Shared;
+using StepTrail.Shared.Definitions;
 using StepTrail.Shared.Entities;
 
 namespace StepTrail.Worker;
@@ -74,6 +75,8 @@ public sealed class StuckExecutionDetector
                             $"expired at {execution.LockExpiresAt:yyyy-MM-dd HH:mm:ss} UTC. " +
                             "Worker may have crashed.";
 
+                RetryPolicy? retryPolicy = null;
+
                 if (execution.WorkflowDefinitionStepId.HasValue)
                 {
                     var stepDefinition = await _db.WorkflowDefinitionSteps
@@ -82,16 +85,11 @@ public sealed class StuckExecutionDetector
                             $"WorkflowDefinitionStep {execution.WorkflowDefinitionStepId.Value} not found " +
                             $"while recovering orphan {execution.Id}.");
 
-                    await _failureService.HandleAsync(
-                        execution,
-                        error,
-                        WorkflowEventTypes.StepOrphaned,
-                        now,
-                        ct,
-                        maxAttempts: stepDefinition.MaxAttempts,
-                        retryDelaySeconds: stepDefinition.RetryDelaySeconds);
-
-                    continue;
+                    retryPolicy = new RetryPolicy(
+                        stepDefinition.MaxAttempts,
+                        stepDefinition.RetryDelaySeconds,
+                        BackoffStrategy.Fixed,
+                        retryOnTimeout: true);
                 }
 
                 await _failureService.HandleAsync(
@@ -99,7 +97,8 @@ public sealed class StuckExecutionDetector
                     error,
                     WorkflowEventTypes.StepOrphaned,
                     now,
-                    ct);
+                    ct,
+                    retryPolicy: retryPolicy);
             }
 
             await tx.CommitAsync(ct);
