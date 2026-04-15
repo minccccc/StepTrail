@@ -9,7 +9,7 @@
 
 <nav aria-label="breadcrumb" class="mb-3">
     <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/ops/definitions">Definitions</a></li>
+        <li class="breadcrumb-item"><a href="/ops/definitions">Workflows</a></li>
         <li class="breadcrumb-item active">Edit</li>
     </ol>
 </nav>
@@ -40,7 +40,19 @@ else if (def is not null)
                 <span class="badge bg-light text-dark border ms-1 fs-6">v@def.Version</span>
                 @Html.Raw(StatusBadge(def.Status))
             </h1>
-            <p class="text-muted mb-0 font-monospace small">@def.Key</p>
+            <p class="text-muted mb-0 font-monospace small">
+                @def.Key
+                @if (!string.IsNullOrWhiteSpace(def.SourceTemplateKey))
+                {
+                    <span class="badge bg-info text-dark ms-2" title="From template: @def.SourceTemplateKey v@def.SourceTemplateVersion">
+                        From template: @def.SourceTemplateKey
+                    </span>
+                }
+                else
+                {
+                    <span class="badge bg-light text-muted border ms-2">Manual</span>
+                }
+            </p>
         </div>
         @if (!def.IsEditable)
         {
@@ -52,7 +64,23 @@ else if (def is not null)
     <div class="card shadow-sm mb-4">
         <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
             <span>Trigger Configuration</span>
-            @Html.Raw(TriggerBadge(def.Trigger.Type))
+            <div class="d-flex align-items-center gap-2">
+                @Html.Raw(TriggerBadge(def.Trigger.Type))
+                @if (def.IsEditable)
+                {
+                    <form method="post" asp-page-handler="ChangeTriggerType" class="d-flex align-items-center gap-1 mb-0">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="id" value="@def.Id" />
+                        <select name="NewTriggerType" class="form-select form-select-sm" style="width:120px">
+                            @foreach (var t in EditModel.TriggerTypes)
+                            {
+                                <option value="@t" selected="@(def.Trigger.Type == t)">@t</option>
+                            }
+                        </select>
+                        <button type="submit" class="btn btn-outline-secondary btn-sm">Change</button>
+                    </form>
+                }
+            </div>
         </div>
         <div class="card-body">
             <form method="post" asp-page-handler="SaveTrigger">
@@ -186,15 +214,43 @@ else if (def is not null)
     {
         var collapseId = $"step-{step.Order}";
         <div class="card shadow-sm mb-3">
-            <div class="card-header fw-semibold d-flex align-items-center justify-content-between"
-                 data-bs-toggle="collapse" data-bs-target="#@collapseId" role="button" style="cursor:pointer">
-                <span>
+            <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
+                <span data-bs-toggle="collapse" data-bs-target="#@collapseId" role="button" style="cursor:pointer" class="flex-grow-1">
                     <span class="text-muted me-1">#@step.Order</span>
                     @step.Key
+                    @Html.Raw(StepTypeBadge(step.Type))
                 </span>
-                @Html.Raw(StepTypeBadge(step.Type))
+                @if (def.IsEditable)
+                {
+                    <div class="d-flex gap-1 ms-2">
+                        @if (step.Order > 1)
+                        {
+                            <form method="post" asp-page-handler="MoveStepUp" class="mb-0">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="id" value="@def.Id" />
+                                <input type="hidden" name="ActionStepKey" value="@step.Key" />
+                                <button type="submit" class="btn btn-outline-secondary btn-sm py-0 px-1" title="Move up">&uarr;</button>
+                            </form>
+                        }
+                        @if (step.Order < def.Steps.Count)
+                        {
+                            <form method="post" asp-page-handler="MoveStepDown" class="mb-0">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="id" value="@def.Id" />
+                                <input type="hidden" name="ActionStepKey" value="@step.Key" />
+                                <button type="submit" class="btn btn-outline-secondary btn-sm py-0 px-1" title="Move down">&darr;</button>
+                            </form>
+                        }
+                        <form method="post" asp-page-handler="RemoveStep" class="mb-0">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="id" value="@def.Id" />
+                            <input type="hidden" name="ActionStepKey" value="@step.Key" />
+                            <button type="submit" class="btn btn-outline-danger btn-sm py-0 px-1" title="Remove step">&times;</button>
+                        </form>
+                    </div>
+                }
             </div>
-            <div id="@collapseId" class="collapse">
+            <div id="@collapseId" class="collapse show">
                 <div class="card-body">
                     <form method="post" asp-page-handler="SaveStep">
                         @Html.AntiForgeryToken()
@@ -391,6 +447,44 @@ else if (def is not null)
             </div>
         </div>
     }
+
+    @* ── Add Step ── *@
+    @if (def.IsEditable)
+    {
+        <div class="card shadow-sm mb-3 border-dashed">
+            <div class="card-body">
+                <form method="post" asp-page-handler="AddStep" class="d-flex align-items-end gap-2">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="id" value="@def.Id" />
+                    <div>
+                        <label class="form-label small fw-semibold mb-1">Step Key</label>
+                        <input name="AddStepKey" type="text" class="form-control form-control-sm font-monospace"
+                               placeholder="my-step" required style="width:180px"
+                               pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]"
+                               title="Lowercase letters, numbers, and hyphens." />
+                    </div>
+                    <div>
+                        <label class="form-label small fw-semibold mb-1">Step Type</label>
+                        <select name="AddStepType" class="form-select form-select-sm" style="width:170px">
+                            @foreach (var t in EditModel.StepTypes)
+                            {
+                                <option value="@t">@StepTypeBadgeLabel(t)</option>
+                            }
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-outline-primary btn-sm">+ Add Step</button>
+                </form>
+            </div>
+        </div>
+    }
+
+    @if (def.Steps.Count == 0)
+    {
+        <div class="alert alert-secondary mb-3">
+            No steps configured yet. Add a step above to define what this workflow does.
+        </div>
+    }
+
     @* ── Review & Activate ── *@
     <div class="card shadow-sm mb-4">
         <div class="card-header fw-semibold">Review & Activate</div>
@@ -444,7 +538,7 @@ else if (def is not null)
                         <button type="submit" class="btn btn-outline-danger btn-sm">Deactivate</button>
                     </form>
                 }
-                <a href="/ops/definitions" class="btn btn-outline-secondary btn-sm">Back to Definitions</a>
+                <a href="/ops/definitions" class="btn btn-outline-secondary btn-sm">Back to Workflows</a>
                 @if (def.Status == "Active")
                 {
                     <a href="/ops/workflows?workflowKey=@Uri.EscapeDataString(def.Key)"
@@ -695,6 +789,16 @@ document.querySelectorAll('.schedule-mode-radio').forEach(radio => {
         "Api"      => "<span class=\"badge bg-primary\">API</span>",
         "Schedule" => "<span class=\"badge bg-warning text-dark\">Schedule</span>",
         _          => $"<span class=\"badge bg-light text-dark\">{triggerType}</span>"
+    };
+
+    static string StepTypeBadgeLabel(string stepType) => stepType switch
+    {
+        "HttpRequest"  => "HTTP Request",
+        "SendWebhook"  => "Outbound Webhook",
+        "Transform"    => "Transform",
+        "Conditional"  => "Conditional",
+        "Delay"        => "Delay",
+        _              => stepType
     };
 
     static string StepTypeBadge(string stepType) => stepType switch

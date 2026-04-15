@@ -412,6 +412,8 @@ ops.MapGet("/workflow-definitions", async (
         Status = d.Status.ToString(),
         TriggerType = d.TriggerDefinition?.Type.ToString(),
         Description = d.Description,
+        SourceTemplateKey = d.SourceTemplateKey,
+        SourceTemplateVersion = d.SourceTemplateVersion,
         StepCount = d.StepDefinitions.Count,
         Steps = d.StepDefinitions
             .OrderBy(s => s.Order)
@@ -427,6 +429,84 @@ ops.MapGet("/workflow-definitions", async (
     });
 
     return Results.Ok(result);
+});
+
+ops.MapPost("/workflow-definitions/from-descriptor", async (
+    CreateFromDescriptorRequest request,
+    IWorkflowRegistry registry,
+    IWorkflowDefinitionRepository repository,
+    CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Name))
+        return Results.BadRequest(new { error = "Name is required." });
+    if (string.IsNullOrWhiteSpace(request.Key))
+        return Results.BadRequest(new { error = "Key is required." });
+    if (!System.Text.RegularExpressions.Regex.IsMatch(request.Key.Trim(), @"^[a-z0-9][a-z0-9\-]*[a-z0-9]$"))
+        return Results.BadRequest(new { error = "Key must contain only lowercase letters, numbers, and hyphens." });
+    if (!Enum.TryParse<TriggerType>(request.TriggerType, ignoreCase: true, out var triggerType))
+        return Results.BadRequest(new { error = $"Invalid trigger type '{request.TriggerType}'." });
+
+    var descriptor = registry.Find(request.DescriptorKey, request.DescriptorVersion)
+                    ?? registry.FindLatest(request.DescriptorKey);
+    if (descriptor is null)
+        return Results.NotFound(new { error = $"Template descriptor '{request.DescriptorKey}' not found." });
+
+    var now = DateTimeOffset.UtcNow;
+
+    TriggerDefinition trigger = triggerType switch
+    {
+        TriggerType.Webhook => TriggerDefinition.CreateWebhook(Guid.NewGuid(), new WebhookTriggerConfiguration(request.Key.Trim())),
+        TriggerType.Manual => TriggerDefinition.CreateManual(Guid.NewGuid(), new ManualTriggerConfiguration("ops-console")),
+        TriggerType.Api => TriggerDefinition.CreateApi(Guid.NewGuid(), new ApiTriggerConfiguration(request.Key.Trim())),
+        TriggerType.Schedule => TriggerDefinition.CreateSchedule(Guid.NewGuid(), new ScheduleTriggerConfiguration(300)),
+        _ => throw new InvalidOperationException($"Unsupported trigger type.")
+    };
+
+    var steps = descriptor.Steps
+        .OrderBy(s => s.Order)
+        .Select(s =>
+        {
+            var step = CreateDefaultStepDefinition(s.StepKey, s.Order, s.StepType);
+            // Carry over retry/timeout settings from the descriptor
+            RetryPolicy? policy = s.MaxAttempts > 1
+                ? new RetryPolicy(s.MaxAttempts, s.RetryDelaySeconds, BackoffStrategy.Fixed)
+                : null;
+            if (policy is not null)
+            {
+                // Rebuild with the descriptor's retry policy
+                step = step.Type switch
+                {
+                    StepType.HttpRequest => StepDefinition.CreateHttpRequest(step.Id, step.Key, step.Order, step.HttpRequestConfiguration!, retryPolicy: policy),
+                    StepType.SendWebhook => StepDefinition.CreateSendWebhook(step.Id, step.Key, step.Order, step.SendWebhookConfiguration!, retryPolicy: policy),
+                    StepType.Transform => StepDefinition.CreateTransform(step.Id, step.Key, step.Order, step.TransformConfiguration!, retryPolicy: policy),
+                    StepType.Conditional => StepDefinition.CreateConditional(step.Id, step.Key, step.Order, step.ConditionalConfiguration!, retryPolicy: policy),
+                    StepType.Delay => StepDefinition.CreateDelay(step.Id, step.Key, step.Order, step.DelayConfiguration!, retryPolicy: policy),
+                    _ => step
+                };
+            }
+            return step;
+        })
+        .ToList();
+
+    var definition = new StepTrail.Shared.Definitions.WorkflowDefinition(
+        Guid.NewGuid(), request.Key.Trim(), request.Name.Trim(), 1,
+        WorkflowDefinitionStatus.Inactive, trigger, steps, now, now,
+        $"Created from template '{descriptor.Key}' v{descriptor.Version}.",
+        sourceTemplateKey: descriptor.Key,
+        sourceTemplateVersion: descriptor.Version);
+
+    try
+    {
+        await repository.SaveNewVersionAsync(definition, ct);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+
+    return Results.Created(
+        $"/workflow-definitions/{definition.Id}",
+        new { id = definition.Id, key = definition.Key, name = definition.Name, status = definition.Status.ToString() });
 });
 
 ops.MapPost("/workflow-definitions/blank", async (
@@ -469,16 +549,10 @@ ops.MapPost("/workflow-definitions/blank", async (
         1,
         WorkflowDefinitionStatus.Inactive,
         trigger,
-        [
-            StepDefinition.CreateHttpRequest(
-                Guid.NewGuid(),
-                "step-1",
-                1,
-                new HttpRequestStepConfiguration("https://api.example.com/endpoint"))
-        ],
+        Array.Empty<StepDefinition>(),
         now,
         now,
-        $"Created from blank template with {triggerType} trigger.");
+        $"Created manually with {triggerType} trigger.");
 
     try
     {
@@ -570,6 +644,50 @@ ops.MapGet("/workflow-definitions/{id:guid}", async (
     return Results.Ok(WorkflowDefinitionDetailMapper.Map(definition));
 });
 
+ops.MapPut("/workflow-definitions/{id:guid}/trigger-type", async (
+    Guid id,
+    ChangeTriggerTypeRequest request,
+    IWorkflowDefinitionRepository repository,
+    CancellationToken ct) =>
+{
+    if (!Enum.TryParse<TriggerType>(request.TriggerType, ignoreCase: true, out var newTriggerType))
+        return Results.BadRequest(new { error = $"Invalid trigger type '{request.TriggerType}'." });
+
+    var definition = await repository.GetByIdAsync(id, ct);
+    if (definition is null)
+        return Results.NotFound(new { error = $"Workflow definition '{id}' not found." });
+
+    if (definition.TriggerDefinition.Type == newTriggerType)
+        return Results.Ok(new { id, triggerType = newTriggerType.ToString(), message = "Already set." });
+
+    TriggerDefinition newTrigger = newTriggerType switch
+    {
+        TriggerType.Webhook => TriggerDefinition.CreateWebhook(Guid.NewGuid(), new WebhookTriggerConfiguration(definition.Key)),
+        TriggerType.Manual => TriggerDefinition.CreateManual(Guid.NewGuid(), new ManualTriggerConfiguration("ops-console")),
+        TriggerType.Api => TriggerDefinition.CreateApi(Guid.NewGuid(), new ApiTriggerConfiguration(definition.Key)),
+        TriggerType.Schedule => TriggerDefinition.CreateSchedule(Guid.NewGuid(), new ScheduleTriggerConfiguration(300)),
+        _ => throw new InvalidOperationException($"Unsupported trigger type.")
+    };
+
+    var now = DateTimeOffset.UtcNow;
+    var updated = new StepTrail.Shared.Definitions.WorkflowDefinition(
+        definition.Id, definition.Key, definition.Name, definition.Version,
+        definition.Status, newTrigger, definition.StepDefinitions,
+        definition.CreatedAtUtc, now, definition.Description,
+        definition.SourceTemplateKey, definition.SourceTemplateVersion);
+
+    try
+    {
+        await repository.UpdateAsync(updated, ct);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+
+    return Results.Ok(new { id, triggerType = newTriggerType.ToString() });
+});
+
 ops.MapPut("/workflow-definitions/{id:guid}/trigger", async (
     Guid id,
     UpdateTriggerRequest request,
@@ -634,7 +752,8 @@ ops.MapPut("/workflow-definitions/{id:guid}/trigger", async (
         definition.StepDefinitions,
         definition.CreatedAtUtc,
         now,
-        definition.Description);
+        definition.Description,
+        definition.SourceTemplateKey, definition.SourceTemplateVersion);
 
     try
     {
@@ -646,6 +765,66 @@ ops.MapPut("/workflow-definitions/{id:guid}/trigger", async (
     }
 
     return Results.Ok(new { id, status = updated.Status.ToString() });
+});
+
+ops.MapPost("/workflow-definitions/{id:guid}/steps", async (
+    Guid id,
+    AddStepRequest request,
+    IWorkflowDefinitionRepository repository,
+    CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.StepKey))
+        return Results.BadRequest(new { error = "Step key is required." });
+    if (string.IsNullOrWhiteSpace(request.StepType))
+        return Results.BadRequest(new { error = "Step type is required." });
+
+    var definition = await repository.GetByIdAsync(id, ct);
+    if (definition is null)
+        return Results.NotFound(new { error = $"Workflow definition '{id}' not found." });
+
+    if (definition.StepDefinitions.Any(s => s.Key == request.StepKey.Trim()))
+        return Results.Conflict(new { error = $"Step key '{request.StepKey}' already exists." });
+
+    var supportedTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        { "HttpRequest", "SendWebhook", "Transform", "Conditional", "Delay" };
+    if (!supportedTypes.Contains(request.StepType))
+        return Results.BadRequest(new { error = $"Unsupported step type '{request.StepType}'. Supported: {string.Join(", ", supportedTypes)}." });
+
+    var nextOrder = definition.StepDefinitions.Count > 0
+        ? definition.StepDefinitions.Max(s => s.Order) + 1
+        : 1;
+
+    StepDefinition newStep;
+    try
+    {
+        newStep = CreateDefaultStepDefinition(request.StepKey.Trim(), nextOrder, request.StepType);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+
+    var allSteps = definition.StepDefinitions.Append(newStep);
+    var now = DateTimeOffset.UtcNow;
+
+    var updated = new StepTrail.Shared.Definitions.WorkflowDefinition(
+        definition.Id, definition.Key, definition.Name, definition.Version,
+        definition.Status, definition.TriggerDefinition, allSteps,
+        definition.CreatedAtUtc, now, definition.Description,
+        definition.SourceTemplateKey, definition.SourceTemplateVersion);
+
+    try
+    {
+        await repository.UpdateAsync(updated, ct);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+
+    return Results.Created(
+        $"/workflow-definitions/{id}/steps/{newStep.Key}",
+        new { id, stepKey = newStep.Key, stepType = newStep.Type.ToString(), order = newStep.Order });
 });
 
 ops.MapPut("/workflow-definitions/{id:guid}/steps/{stepKey}", async (
@@ -739,7 +918,8 @@ ops.MapPut("/workflow-definitions/{id:guid}/steps/{stepKey}", async (
     var updated = new StepTrail.Shared.Definitions.WorkflowDefinition(
         definition.Id, definition.Key, definition.Name, definition.Version,
         definition.Status, definition.TriggerDefinition, newSteps,
-        definition.CreatedAtUtc, now, definition.Description);
+        definition.CreatedAtUtc, now, definition.Description,
+        definition.SourceTemplateKey, definition.SourceTemplateVersion);
 
     try
     {
@@ -751,6 +931,118 @@ ops.MapPut("/workflow-definitions/{id:guid}/steps/{stepKey}", async (
     }
 
     return Results.Ok(new { id, stepKey, status = updated.Status.ToString() });
+});
+
+ops.MapDelete("/workflow-definitions/{id:guid}/steps/{stepKey}", async (
+    Guid id,
+    string stepKey,
+    IWorkflowDefinitionRepository repository,
+    CancellationToken ct) =>
+{
+    var definition = await repository.GetByIdAsync(id, ct);
+    if (definition is null)
+        return Results.NotFound(new { error = $"Workflow definition '{id}' not found." });
+
+    if (!definition.StepDefinitions.Any(s => s.Key == stepKey))
+        return Results.NotFound(new { error = $"Step '{stepKey}' not found." });
+
+    // Remove the step and re-order remaining steps sequentially.
+    var remaining = definition.StepDefinitions
+        .Where(s => s.Key != stepKey)
+        .OrderBy(s => s.Order)
+        .Select((s, i) => new StepDefinition(
+            s.Id, s.Key, i + 1, s.Type,
+            s.HttpRequestConfiguration, s.TransformConfiguration,
+            s.ConditionalConfiguration, s.DelayConfiguration,
+            s.SendWebhookConfiguration, s.RetryPolicyOverrideKey, s.RetryPolicy));
+
+    var now = DateTimeOffset.UtcNow;
+    var updated = new StepTrail.Shared.Definitions.WorkflowDefinition(
+        definition.Id, definition.Key, definition.Name, definition.Version,
+        definition.Status, definition.TriggerDefinition, remaining,
+        definition.CreatedAtUtc, now, definition.Description,
+        definition.SourceTemplateKey, definition.SourceTemplateVersion);
+
+    try { await repository.UpdateAsync(updated, ct); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+
+    return Results.Ok(new { id, removed = stepKey });
+});
+
+ops.MapPost("/workflow-definitions/{id:guid}/steps/{stepKey}/move-up", async (
+    Guid id,
+    string stepKey,
+    IWorkflowDefinitionRepository repository,
+    CancellationToken ct) =>
+{
+    var definition = await repository.GetByIdAsync(id, ct);
+    if (definition is null)
+        return Results.NotFound(new { error = $"Workflow definition '{id}' not found." });
+
+    var ordered = definition.StepDefinitions.OrderBy(s => s.Order).ToList();
+    var index = ordered.FindIndex(s => s.Key == stepKey);
+
+    if (index < 0) return Results.NotFound(new { error = $"Step '{stepKey}' not found." });
+    if (index == 0) return Results.Ok(new { id, stepKey, message = "Already first." });
+
+    // Swap with previous
+    (ordered[index], ordered[index - 1]) = (ordered[index - 1], ordered[index]);
+
+    var reordered = ordered.Select((s, i) => new StepDefinition(
+        s.Id, s.Key, i + 1, s.Type,
+        s.HttpRequestConfiguration, s.TransformConfiguration,
+        s.ConditionalConfiguration, s.DelayConfiguration,
+        s.SendWebhookConfiguration, s.RetryPolicyOverrideKey, s.RetryPolicy));
+
+    var now = DateTimeOffset.UtcNow;
+    var updated = new StepTrail.Shared.Definitions.WorkflowDefinition(
+        definition.Id, definition.Key, definition.Name, definition.Version,
+        definition.Status, definition.TriggerDefinition, reordered,
+        definition.CreatedAtUtc, now, definition.Description,
+        definition.SourceTemplateKey, definition.SourceTemplateVersion);
+
+    try { await repository.UpdateAsync(updated, ct); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+
+    return Results.Ok(new { id, stepKey, newOrder = index });
+});
+
+ops.MapPost("/workflow-definitions/{id:guid}/steps/{stepKey}/move-down", async (
+    Guid id,
+    string stepKey,
+    IWorkflowDefinitionRepository repository,
+    CancellationToken ct) =>
+{
+    var definition = await repository.GetByIdAsync(id, ct);
+    if (definition is null)
+        return Results.NotFound(new { error = $"Workflow definition '{id}' not found." });
+
+    var ordered = definition.StepDefinitions.OrderBy(s => s.Order).ToList();
+    var index = ordered.FindIndex(s => s.Key == stepKey);
+
+    if (index < 0) return Results.NotFound(new { error = $"Step '{stepKey}' not found." });
+    if (index >= ordered.Count - 1) return Results.Ok(new { id, stepKey, message = "Already last." });
+
+    // Swap with next
+    (ordered[index], ordered[index + 1]) = (ordered[index + 1], ordered[index]);
+
+    var reordered = ordered.Select((s, i) => new StepDefinition(
+        s.Id, s.Key, i + 1, s.Type,
+        s.HttpRequestConfiguration, s.TransformConfiguration,
+        s.ConditionalConfiguration, s.DelayConfiguration,
+        s.SendWebhookConfiguration, s.RetryPolicyOverrideKey, s.RetryPolicy));
+
+    var now = DateTimeOffset.UtcNow;
+    var updated = new StepTrail.Shared.Definitions.WorkflowDefinition(
+        definition.Id, definition.Key, definition.Name, definition.Version,
+        definition.Status, definition.TriggerDefinition, reordered,
+        definition.CreatedAtUtc, now, definition.Description,
+        definition.SourceTemplateKey, definition.SourceTemplateVersion);
+
+    try { await repository.UpdateAsync(updated, ct); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+
+    return Results.Ok(new { id, stepKey, newOrder = index + 2 });
 });
 
 ops.MapPost("/workflow-definitions/{id:guid}/activate", async (
@@ -772,7 +1064,8 @@ ops.MapPost("/workflow-definitions/{id:guid}/activate", async (
     var activated = new StepTrail.Shared.Definitions.WorkflowDefinition(
         definition.Id, definition.Key, definition.Name, definition.Version,
         WorkflowDefinitionStatus.Active, definition.TriggerDefinition, definition.StepDefinitions,
-        definition.CreatedAtUtc, now, definition.Description);
+        definition.CreatedAtUtc, now, definition.Description,
+        definition.SourceTemplateKey, definition.SourceTemplateVersion);
 
     try
     {
@@ -1222,4 +1515,34 @@ static IEnumerable<TransformValueMapping> ParseMappings(string mappingsText)
     }
 
     return mappings.Count > 0 ? mappings : [new TransformValueMapping("output", "{{input}}")];
+}
+
+static StepDefinition CreateDefaultStepDefinition(string stepKey, int order, string stepType)
+{
+    // Map legacy handler type names and canonical step types to StepDefinition factories.
+    var normalizedType = stepType.ToLowerInvariant();
+
+    if (normalizedType.Contains("http") && !normalizedType.Contains("webhook"))
+        return StepDefinition.CreateHttpRequest(Guid.NewGuid(), stepKey, order,
+            new HttpRequestStepConfiguration("https://api.example.com/endpoint"));
+
+    if (normalizedType.Contains("webhook") || normalizedType.Contains("sendwebhook"))
+        return StepDefinition.CreateSendWebhook(Guid.NewGuid(), stepKey, order,
+            new SendWebhookStepConfiguration("https://hooks.example.com/outbound"));
+
+    if (normalizedType.Contains("transform"))
+        return StepDefinition.CreateTransform(Guid.NewGuid(), stepKey, order,
+            new TransformStepConfiguration([new TransformValueMapping("output", "{{input}}")]));
+
+    if (normalizedType.Contains("conditional"))
+        return StepDefinition.CreateConditional(Guid.NewGuid(), stepKey, order,
+            new ConditionalStepConfiguration("{{input.status}}", ConditionalOperator.Equals, "ready"));
+
+    if (normalizedType.Contains("delay"))
+        return StepDefinition.CreateDelay(Guid.NewGuid(), stepKey, order,
+            new DelayStepConfiguration(30));
+
+    throw new ArgumentException(
+        $"Unsupported step type '{stepType}'. Supported types: HttpRequest, SendWebhook, Transform, Conditional, Delay.",
+        nameof(stepType));
 }

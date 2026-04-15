@@ -123,20 +123,20 @@ public class WorkflowDefinitionTests
     }
 
     [Fact]
-    public void Constructor_Throws_WhenStepDefinitionsAreEmpty()
+    public void Constructor_AllowsEmptyStepDefinitions()
     {
-        var ex = Assert.Throws<ArgumentException>(() => new WorkflowDefinition(
+        var definition = new WorkflowDefinition(
             Guid.NewGuid(),
             "workflow-key",
             "Workflow Name",
             1,
-            WorkflowDefinitionStatus.Active,
+            WorkflowDefinitionStatus.Inactive,
             CreateTrigger(),
             [],
             DateTimeOffset.UtcNow,
-            DateTimeOffset.UtcNow));
+            DateTimeOffset.UtcNow);
 
-        Assert.Equal("stepDefinitions", ex.ParamName);
+        Assert.Empty(definition.StepDefinitions);
     }
 
     [Fact]

@@ -1,14 +1,15 @@
 @page "/ops/definitions"
 @model StepTrail.Api.Pages.Templates.IndexModel
 @{
-    ViewData["Title"] = "Workflow Definitions";
+    ViewData["Title"] = "Workflows";
 }
 
 <div class="d-flex align-items-center justify-content-between mb-3">
-    <h1 class="h3 mb-0">Workflow Definitions</h1>
+    <h1 class="h3 mb-0">Workflows</h1>
     <div class="d-flex align-items-center gap-2">
-        <span class="text-muted small">@Model.Definitions.Count definition(s)</span>
-        <a href="/ops/definitions/new" class="btn btn-sm btn-primary">+ New Definition</a>
+        <span class="text-muted small">@Model.Definitions.Count workflow(s)</span>
+        <a href="/ops/templates" class="btn btn-sm btn-outline-primary">From Template</a>
+        <a href="/ops/definitions/new" class="btn btn-sm btn-primary">+ New Workflow</a>
     </div>
 </div>
 
@@ -19,7 +20,7 @@
 else if (!Model.Definitions.Any())
 {
     <div class="alert alert-secondary">
-        No workflow definitions found. Create one programmatically or via the definition sync service.
+        No workflows found. Create one from a template or manually.
     </div>
 }
 else
@@ -30,6 +31,7 @@ else
                 <tr>
                     <th>Name</th>
                     <th>Key</th>
+                    <th>Source</th>
                     <th>Trigger</th>
                     <th>Status</th>
                     <th>Version</th>
@@ -50,6 +52,16 @@ else
                             }
                         </td>
                         <td class="font-monospace small">@def.Key</td>
+                        <td class="small">
+                            @if (!string.IsNullOrWhiteSpace(def.SourceTemplateKey))
+                            {
+                                <span class="badge bg-info text-dark" title="From template: @def.SourceTemplateKey v@def.SourceTemplateVersion">Template</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-light text-muted border">Manual</span>
+                            }
+                        </td>
                         <td>@Html.Raw(TriggerBadge(def.TriggerType))</td>
                         <td>@Html.Raw(StatusBadge(def.Status))</td>
                         <td class="text-center">
@@ -57,10 +69,14 @@ else
                         </td>
                         <td class="text-center text-muted">@def.StepCount</td>
                         <td class="text-muted small">@def.UpdatedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
-                        <td>
+                        <td class="d-flex gap-1">
+                            <a href="/ops/definitions/edit?id=@def.Id"
+                               class="btn btn-sm btn-outline-secondary">Edit</a>
+                            <a href="/ops/definitions/create?templateId=@def.Id"
+                               class="btn btn-sm btn-outline-secondary" title="Clone this workflow">Clone</a>
                             <a href="/ops/workflows?workflowKey=@Uri.EscapeDataString(def.Key)"
                                class="btn btn-sm btn-outline-primary">
-                                View Instances
+                                Instances
                             </a>
                         </td>
                     </tr>

@@ -140,6 +140,8 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
         record.Version = definition.Version;
         record.Status = definition.Status;
         record.Description = definition.Description;
+        record.SourceTemplateKey = definition.SourceTemplateKey;
+        record.SourceTemplateVersion = definition.SourceTemplateVersion;
         record.CreatedAtUtc = definition.CreatedAtUtc;
         record.UpdatedAtUtc = definition.UpdatedAtUtc;
 
@@ -300,6 +302,8 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
             Version = definition.Version,
             Status = definition.Status,
             Description = definition.Description,
+            SourceTemplateKey = definition.SourceTemplateKey,
+            SourceTemplateVersion = definition.SourceTemplateVersion,
             CreatedAtUtc = definition.CreatedAtUtc,
             UpdatedAtUtc = definition.UpdatedAtUtc,
             TriggerDefinition = MapToRecord(definition.Id, definition.TriggerDefinition),
@@ -349,7 +353,9 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
                 .ToList(),
             record.CreatedAtUtc,
             record.UpdatedAtUtc,
-            record.Description);
+            record.Description,
+            record.SourceTemplateKey,
+            record.SourceTemplateVersion);
 
     private static TriggerDefinition MapToDomain(ExecutableTriggerDefinitionRecord record) =>
         record.Type switch

@@ -1,14 +1,13 @@
 @page "/ops/definitions/create"
 @model StepTrail.Api.Pages.Templates.CreateModel
 @{
-    ViewData["Title"] = "Create Workflow Definition";
+    ViewData["Title"] = "Clone Workflow";
 }
 
 <nav aria-label="breadcrumb" class="mb-3">
     <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/ops/definitions">Definitions</a></li>
-        <li class="breadcrumb-item"><a href="/ops/definitions/new">Create from Template</a></li>
-        <li class="breadcrumb-item active">Configure</li>
+        <li class="breadcrumb-item"><a href="/ops/definitions">Workflows</a></li>
+        <li class="breadcrumb-item active">Clone</li>
     </ol>
 </nav>
 
@@ -23,7 +22,7 @@
         {
             @* Template summary *@
             <div class="card shadow-sm mb-4">
-                <div class="card-header fw-semibold">Template</div>
+                <div class="card-header fw-semibold">Source Workflow</div>
                 <div class="card-body">
                     <div class="d-flex align-items-center gap-2 mb-2">
                         @Html.Raw(TriggerBadge(Model.Template.TriggerType))
@@ -53,7 +52,7 @@
 
             @* Create form *@
             <div class="card shadow-sm">
-                <div class="card-header fw-semibold">New Definition</div>
+                <div class="card-header fw-semibold">New Workflow</div>
                 <div class="card-body">
 
                     @if (!ViewData.ModelState.IsValid)
@@ -89,7 +88,7 @@
                         </div>
 
                         <div class="d-flex gap-2 mt-4">
-                            <button type="submit" class="btn btn-primary">Create Definition</button>
+                            <button type="submit" class="btn btn-primary">Create Workflow</button>
                             <a href="/ops/definitions/new" class="btn btn-outline-secondary">Cancel</a>
                         </div>
                     </form>

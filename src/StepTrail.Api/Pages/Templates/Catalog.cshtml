@@ -1,0 +1,83 @@
+@page "/ops/templates"
+@model StepTrail.Api.Pages.Templates.CatalogModel
+@{
+    ViewData["Title"] = "Templates";
+}
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+    <div>
+        <h1 class="h3 mb-1">Templates</h1>
+        <p class="text-muted mb-0 small">Predefined workflow blueprints. Use a template to create a new workflow.</p>
+    </div>
+</div>
+
+@if (Model.ErrorMessage is not null)
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+else if (!Model.Templates.Any())
+{
+    <div class="alert alert-secondary">
+        No templates available. Templates are registered programmatically as workflow descriptors.
+        <br />You can still <a href="/ops/definitions/new">create a workflow manually</a>.
+    </div>
+}
+else
+{
+    <div class="row g-4">
+        @foreach (var template in Model.Templates)
+        {
+            <div class="col-md-6 col-lg-4">
+                <div class="card shadow-sm h-100">
+                    <div class="card-body d-flex flex-column">
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <span class="badge bg-light text-dark border">v@template.Version</span>
+                            <span class="badge bg-light text-muted border">@template.Steps.Count step(s)</span>
+                        </div>
+
+                        <h5 class="card-title mb-1">@template.Name</h5>
+                        <p class="font-monospace text-muted small mb-2">@template.Key</p>
+
+                        @if (!string.IsNullOrWhiteSpace(template.Description))
+                        {
+                            <p class="card-text text-muted small flex-grow-1">@template.Description</p>
+                        }
+                        else
+                        {
+                            <div class="flex-grow-1"></div>
+                        }
+
+                        @if (template.Steps.Count > 0)
+                        {
+                            <div class="d-flex align-items-center gap-1 mt-2 small text-muted border-top pt-2 flex-wrap">
+                                <span class="fw-semibold">Trigger</span>
+                                @foreach (var step in template.Steps.OrderBy(s => s.Order))
+                                {
+                                    <span>&rarr;</span>
+                                    <span title="@step.StepKey">@StepTypeLabel(step.StepType)</span>
+                                }
+                            </div>
+                        }
+
+                        <a href="/ops/definitions/from-template?descriptorKey=@Uri.EscapeDataString(template.Key)&descriptorVersion=@template.Version"
+                           class="btn btn-primary btn-sm mt-3">
+                            Use Template
+                        </a>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@functions {
+    static string StepTypeLabel(string stepType) => stepType switch
+    {
+        "HttpRequest" or "HttpActivityHandler" => "HTTP",
+        "SendWebhook" or "SendWebhookStepExecutor" => "Webhook",
+        "Transform" or "TransformStepExecutor" => "Transform",
+        "Conditional" or "ConditionalStepExecutor" => "Conditional",
+        "Delay" or "DelayStepExecutor" => "Delay",
+        _ => stepType
+    };
+}

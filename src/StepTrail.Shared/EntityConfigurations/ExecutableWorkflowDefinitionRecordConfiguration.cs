@@ -22,6 +22,8 @@ public class ExecutableWorkflowDefinitionRecordConfiguration : IEntityTypeConfig
             .HasMaxLength(50)
             .IsRequired();
         builder.Property(definition => definition.Description).HasColumnName("description").HasMaxLength(1000);
+        builder.Property(definition => definition.SourceTemplateKey).HasColumnName("source_template_key").HasMaxLength(200);
+        builder.Property(definition => definition.SourceTemplateVersion).HasColumnName("source_template_version");
         builder.Property(definition => definition.CreatedAtUtc).HasColumnName("created_at_utc").IsRequired();
         builder.Property(definition => definition.UpdatedAtUtc).HasColumnName("updated_at_utc").IsRequired();
 

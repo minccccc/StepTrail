@@ -1,14 +1,14 @@
 @page "/ops/workflows"
 @model StepTrail.Api.Pages.Workflows.IndexModel
 @{
-    ViewData["Title"] = "Workflow Instances";
+    ViewData["Title"] = "Instances";
 }
 
 <div class="d-flex align-items-center justify-content-between mb-3">
-    <h1 class="h3 mb-0">Workflow Instances</h1>
+    <h1 class="h3 mb-0">Instances</h1>
     <div class="d-flex align-items-center gap-2">
         <span class="text-muted small">@Model.Result.Total total</span>
-        <a href="/ops/workflows/create" class="btn btn-sm btn-primary">+ New Instance</a>
+        <a href="/ops/workflows/create" class="btn btn-sm btn-primary">+ Run Workflow</a>
     </div>
 </div>
 

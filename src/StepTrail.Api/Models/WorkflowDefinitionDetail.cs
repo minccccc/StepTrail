@@ -10,6 +10,8 @@ public sealed class WorkflowDefinitionDetail
     public int Version { get; init; }
     public string Status { get; init; } = string.Empty;
     public string? Description { get; init; }
+    public string? SourceTemplateKey { get; init; }
+    public int? SourceTemplateVersion { get; init; }
     public bool IsEditable { get; init; }
     public DateTimeOffset CreatedAtUtc { get; init; }
     public DateTimeOffset UpdatedAtUtc { get; init; }
@@ -90,6 +92,8 @@ public static class WorkflowDefinitionDetailMapper
             Version = definition.Version,
             Status = definition.Status.ToString(),
             Description = definition.Description,
+            SourceTemplateKey = definition.SourceTemplateKey,
+            SourceTemplateVersion = definition.SourceTemplateVersion,
             IsEditable = definition.Status is WorkflowDefinitionStatus.Draft or WorkflowDefinitionStatus.Inactive,
             CreatedAtUtc = definition.CreatedAtUtc,
             UpdatedAtUtc = definition.UpdatedAtUtc,

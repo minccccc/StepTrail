@@ -9,6 +9,13 @@ public class ExecutableWorkflowDefinitionRecord
     public int Version { get; set; }
     public WorkflowDefinitionStatus Status { get; set; }
     public string? Description { get; set; }
+
+    /// <summary>Key of the template this workflow was created from. Null for manually created workflows.</summary>
+    public string? SourceTemplateKey { get; set; }
+
+    /// <summary>Version of the template this workflow was created from.</summary>
+    public int? SourceTemplateVersion { get; set; }
+
     public DateTimeOffset CreatedAtUtc { get; set; }
     public DateTimeOffset UpdatedAtUtc { get; set; }
 

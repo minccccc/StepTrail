@@ -1,17 +1,17 @@
 @page "/ops/definitions/new"
 @model StepTrail.Api.Pages.Templates.NewModel
 @{
-    ViewData["Title"] = "New Workflow Definition";
+    ViewData["Title"] = "New Workflow";
 }
 
 <nav aria-label="breadcrumb" class="mb-3">
     <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/ops/definitions">Definitions</a></li>
-        <li class="breadcrumb-item active">New Definition</li>
+        <li class="breadcrumb-item"><a href="/ops/definitions">Workflows</a></li>
+        <li class="breadcrumb-item active">New Workflow</li>
     </ol>
 </nav>
 
-<h1 class="h3 mb-4">New Workflow Definition</h1>
+<h1 class="h3 mb-4">New Workflow</h1>
 
 @if (Model.ErrorMessage is not null)
 {
@@ -28,120 +28,53 @@
     </div>
 }
 
-@* ── Create Blank ── *@
-<div class="card shadow-sm mb-4">
-    <div class="card-header fw-semibold">Create Blank Definition</div>
-    <div class="card-body">
-        <p class="text-muted small mb-3">
-            Start with a blank workflow definition. Choose a trigger type and configure everything from scratch.
-        </p>
-        <form method="post" asp-page-handler="CreateBlank">
-            @Html.AntiForgeryToken()
-            <div class="row g-3 align-items-end">
-                <div class="col-md-3">
-                    <label class="form-label small fw-semibold">Name</label>
-                    <input name="BlankName" type="text" class="form-control form-control-sm"
-                           value="@Model.BlankName" placeholder="My Workflow" required />
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label small fw-semibold">Key</label>
-                    <input name="BlankKey" type="text" class="form-control form-control-sm font-monospace"
-                           value="@Model.BlankKey" placeholder="my-workflow" required
-                           pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]"
-                           title="Lowercase letters, numbers, and hyphens." />
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label small fw-semibold">Trigger Type</label>
-                    <select name="BlankTriggerType" class="form-select form-select-sm">
-                        @foreach (var t in NewModel.TriggerTypes)
-                        {
-                            <option value="@t" selected="@(Model.BlankTriggerType == t)">@t</option>
-                        }
-                    </select>
-                </div>
-                <div class="col-md-3">
-                    <button type="submit" class="btn btn-primary btn-sm w-100">Create</button>
-                </div>
+<div class="row justify-content-center">
+    <div class="col-lg-7">
+        <div class="card shadow-sm mb-4">
+            <div class="card-header fw-semibold">Create Manually</div>
+            <div class="card-body">
+                <p class="text-muted small mb-3">
+                    Start with a blank workflow. Choose a trigger type and add steps from scratch.
+                </p>
+                <form method="post" asp-page-handler="CreateBlank">
+                    @Html.AntiForgeryToken()
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Workflow Name</label>
+                        <input name="BlankName" type="text" class="form-control"
+                               value="@Model.BlankName" placeholder="My Workflow" required autofocus />
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Workflow Key</label>
+                        <input name="BlankKey" type="text" class="form-control font-monospace"
+                               value="@Model.BlankKey" placeholder="my-workflow" required
+                               pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]"
+                               title="Lowercase letters, numbers, and hyphens." />
+                        <div class="form-text">Stable identifier. Cannot be changed after creation.</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Trigger Type</label>
+                        <select name="BlankTriggerType" class="form-select">
+                            @foreach (var t in NewModel.TriggerTypes)
+                            {
+                                <option value="@t" selected="@(Model.BlankTriggerType == t)">@t</option>
+                            }
+                        </select>
+                        <div class="form-text">How this workflow will be started. You can change this later in the editor.</div>
+                    </div>
+
+                    <div class="d-flex gap-2 mt-4">
+                        <button type="submit" class="btn btn-primary">Create Workflow</button>
+                        <a href="/ops/definitions" class="btn btn-outline-secondary">Cancel</a>
+                    </div>
+                </form>
             </div>
-        </form>
+        </div>
+
+        <p class="text-muted small text-center">
+            Or <a href="/ops/templates">browse templates</a> to create a workflow from a predefined blueprint.
+        </p>
     </div>
 </div>
-
-@* ── From Template ── *@
-@if (Model.Templates.Any())
-{
-    <h5 class="text-muted mb-3">Or create from an existing template</h5>
-
-    <div class="row g-4">
-        @foreach (var template in Model.Templates)
-        {
-            <div class="col-md-6 col-lg-4">
-                <div class="card shadow-sm h-100">
-                    <div class="card-body d-flex flex-column">
-                        <div class="d-flex align-items-center gap-2 mb-2">
-                            @Html.Raw(TriggerBadge(template.TriggerType))
-                            <span class="badge bg-light text-dark border">v@template.Version</span>
-                            <span class="badge bg-light text-muted border">@template.StepCount step(s)</span>
-                        </div>
-
-                        <h5 class="card-title mb-1">@template.Name</h5>
-                        <p class="font-monospace text-muted small mb-2">@template.Key</p>
-
-                        @if (!string.IsNullOrWhiteSpace(template.Description))
-                        {
-                            <p class="card-text text-muted small flex-grow-1">
-                                @Truncate(template.Description, 120)
-                            </p>
-                        }
-                        else
-                        {
-                            <div class="flex-grow-1"></div>
-                        }
-
-                        @if (template.Steps.Count > 0)
-                        {
-                            <div class="d-flex align-items-center gap-1 mt-2 small text-muted border-top pt-2 flex-wrap">
-                                <span class="fw-semibold">@(template.TriggerType ?? "Trigger")</span>
-                                @foreach (var step in template.Steps)
-                                {
-                                    <span>&rarr;</span>
-                                    <span title="@step.Key">@StepTypeLabel(step.Type)</span>
-                                }
-                            </div>
-                        }
-
-                        <a href="/ops/definitions/create?templateId=@template.Id"
-                           class="btn btn-outline-primary btn-sm mt-3">
-                            Use Template
-                        </a>
-                    </div>
-                </div>
-            </div>
-        }
-    </div>
-}
-
-@functions {
-    static string TriggerBadge(string? triggerType) => triggerType switch
-    {
-        "Webhook"  => "<span class=\"badge bg-info text-dark\">Webhook</span>",
-        "Manual"   => "<span class=\"badge bg-secondary\">Manual</span>",
-        "Api"      => "<span class=\"badge bg-primary\">API</span>",
-        "Schedule" => "<span class=\"badge bg-warning text-dark\">Schedule</span>",
-        null       => "<span class=\"badge bg-light text-dark border\">Unknown</span>",
-        _          => $"<span class=\"badge bg-light text-dark\">{triggerType}</span>"
-    };
-
-    static string StepTypeLabel(string stepType) => stepType switch
-    {
-        "HttpRequest"  => "HTTP",
-        "SendWebhook"  => "Webhook",
-        "Transform"    => "Transform",
-        "Conditional"  => "Conditional",
-        "Delay"        => "Delay",
-        _              => stepType
-    };
-
-    static string Truncate(string text, int max) =>
-        text.Length <= max ? text : text[..max] + "...";
-}

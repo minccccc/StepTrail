@@ -9,6 +9,8 @@ public sealed class WorkflowDefinitionSummary
     public string Status { get; init; } = string.Empty;
     public string? TriggerType { get; init; }
     public string? Description { get; init; }
+    public string? SourceTemplateKey { get; init; }
+    public int? SourceTemplateVersion { get; init; }
     public int StepCount { get; init; }
 
     /// <summary>Ordered step summaries for shape preview (trigger → step1 → step2 → ...).</summary>

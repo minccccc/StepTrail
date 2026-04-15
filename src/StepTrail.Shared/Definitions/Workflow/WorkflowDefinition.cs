@@ -25,7 +25,9 @@ public sealed class WorkflowDefinition
         IEnumerable<StepDefinition> stepDefinitions,
         DateTimeOffset createdAtUtc,
         DateTimeOffset updatedAtUtc,
-        string? description = null)
+        string? description = null,
+        string? sourceTemplateKey = null,
+        int? sourceTemplateVersion = null)
     {
         if (id == Guid.Empty)
             throw new ArgumentException("Workflow definition id must not be empty.", nameof(id));
@@ -42,8 +44,6 @@ public sealed class WorkflowDefinition
             .OrderBy(step => step.Order)
             .ToList();
 
-        if (orderedStepDefinitions.Count == 0)
-            throw new ArgumentException("Workflow definition must contain at least one step definition.", nameof(stepDefinitions));
         if (updatedAtUtc < createdAtUtc)
             throw new ArgumentOutOfRangeException(nameof(updatedAtUtc), "UpdatedAtUtc must be greater than or equal to CreatedAtUtc.");
 
@@ -78,6 +78,8 @@ public sealed class WorkflowDefinition
         Status = status;
         TriggerDefinition = triggerDefinition;
         Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
+        SourceTemplateKey = string.IsNullOrWhiteSpace(sourceTemplateKey) ? null : sourceTemplateKey.Trim();
+        SourceTemplateVersion = sourceTemplateVersion;
         CreatedAtUtc = createdAtUtc;
         UpdatedAtUtc = updatedAtUtc;
         _stepDefinitions.AddRange(orderedStepDefinitions);
@@ -89,6 +91,8 @@ public sealed class WorkflowDefinition
     public int Version { get; private set; }
     public WorkflowDefinitionStatus Status { get; private set; }
     public string? Description { get; private set; }
+    public string? SourceTemplateKey { get; private set; }
+    public int? SourceTemplateVersion { get; private set; }
     public DateTimeOffset CreatedAtUtc { get; private set; }
     public DateTimeOffset UpdatedAtUtc { get; private set; }
     public TriggerDefinition TriggerDefinition { get; private set; }

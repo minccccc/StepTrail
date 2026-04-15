@@ -101,6 +101,30 @@ public sealed class WorkflowApiClient
         }
     }
 
+    public async Task<ApiActionResult> ChangeTriggerTypeAsync(
+        Guid definitionId,
+        string triggerType,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _http.PutAsJsonAsync(
+                $"/workflow-definitions/{definitionId}/trigger-type",
+                new { triggerType }, ct);
+
+            if (response.IsSuccessStatusCode)
+                return ApiActionResult.Ok();
+
+            var body = await response.Content.ReadAsStringAsync(ct);
+            return ApiActionResult.Fail(ExtractErrorMessage(body) ?? $"API returned {(int)response.StatusCode}.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error changing trigger type for definition {Id}", definitionId);
+            return ApiActionResult.Fail("An unexpected error occurred.");
+        }
+    }
+
     public async Task<ApiActionResult> UpdateTriggerAsync(
         Guid definitionId,
         UpdateTriggerRequest request,
@@ -120,6 +144,57 @@ public sealed class WorkflowApiClient
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error updating trigger for definition {Id}", definitionId);
+            return ApiActionResult.Fail("An unexpected error occurred.");
+        }
+    }
+
+    public async Task<ApiActionResult> RemoveStepAsync(
+        Guid definitionId, string stepKey, CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _http.DeleteAsync(
+                $"/workflow-definitions/{definitionId}/steps/{Uri.EscapeDataString(stepKey)}", ct);
+            if (response.IsSuccessStatusCode) return ApiActionResult.Ok();
+            var body = await response.Content.ReadAsStringAsync(ct);
+            return ApiActionResult.Fail(ExtractErrorMessage(body) ?? $"API returned {(int)response.StatusCode}.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error removing step {StepKey} from {Id}", stepKey, definitionId);
+            return ApiActionResult.Fail("An unexpected error occurred.");
+        }
+    }
+
+    public async Task<ApiActionResult> MoveStepUpAsync(
+        Guid definitionId, string stepKey, CancellationToken ct = default)
+        => await PostActionAsync($"/workflow-definitions/{definitionId}/steps/{Uri.EscapeDataString(stepKey)}/move-up", ct);
+
+    public async Task<ApiActionResult> MoveStepDownAsync(
+        Guid definitionId, string stepKey, CancellationToken ct = default)
+        => await PostActionAsync($"/workflow-definitions/{definitionId}/steps/{Uri.EscapeDataString(stepKey)}/move-down", ct);
+
+    public async Task<ApiActionResult> AddStepAsync(
+        Guid definitionId,
+        string stepKey,
+        string stepType,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _http.PostAsJsonAsync(
+                $"/workflow-definitions/{definitionId}/steps",
+                new { stepKey, stepType }, ct);
+
+            if (response.IsSuccessStatusCode)
+                return ApiActionResult.Ok();
+
+            var body = await response.Content.ReadAsStringAsync(ct);
+            return ApiActionResult.Fail(ExtractErrorMessage(body) ?? $"API returned {(int)response.StatusCode}.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error adding step to definition {Id}", definitionId);
             return ApiActionResult.Fail("An unexpected error occurred.");
         }
     }
@@ -154,6 +229,36 @@ public sealed class WorkflowApiClient
 
     public async Task<ApiActionResult> DeactivateDefinitionAsync(Guid id, CancellationToken ct = default)
         => await PostActionAsync($"/workflow-definitions/{id}/deactivate", ct);
+
+    public async Task<CloneDefinitionResult> CreateFromDescriptorAsync(
+        string descriptorKey,
+        int descriptorVersion,
+        string name,
+        string key,
+        string triggerType,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _http.PostAsJsonAsync("/workflow-definitions/from-descriptor",
+                new { descriptorKey, descriptorVersion, name, key, triggerType }, ct);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadFromJsonAsync<CloneDefinitionResponse>(ct);
+                return CloneDefinitionResult.Ok(body!.Id);
+            }
+
+            var errorBody = await response.Content.ReadAsStringAsync(ct);
+            var message = ExtractErrorMessage(errorBody) ?? $"API returned {(int)response.StatusCode}.";
+            return CloneDefinitionResult.Fail(message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error creating workflow from descriptor {Key}", descriptorKey);
+            return CloneDefinitionResult.Fail("An unexpected error occurred.");
+        }
+    }
 
     public async Task<CloneDefinitionResult> CreateBlankDefinitionAsync(
         string name,
@@ -392,4 +497,12 @@ public sealed class WorkflowDescriptorSummary
     public int Version { get; init; }
     public string Name { get; init; } = string.Empty;
     public string? Description { get; init; }
+    public IReadOnlyList<WorkflowDescriptorStepSummary> Steps { get; init; } = [];
+}
+
+public sealed class WorkflowDescriptorStepSummary
+{
+    public int Order { get; init; }
+    public string StepKey { get; init; } = string.Empty;
+    public string StepType { get; init; } = string.Empty;
 }

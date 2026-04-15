@@ -52,6 +52,25 @@ public sealed class EditModel : PageModel
         return Page();
     }
 
+    [BindProperty] public string? NewTriggerType { get; set; }
+
+    public static readonly string[] TriggerTypes = ["Webhook", "Manual", "Api", "Schedule"];
+
+    public async Task<IActionResult> OnPostChangeTriggerTypeAsync(CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(NewTriggerType))
+        {
+            TempData["ErrorMessage"] = "Please select a trigger type.";
+            return RedirectToPage(new { id = Id });
+        }
+
+        var result = await _api.ChangeTriggerTypeAsync(Id, NewTriggerType, ct);
+
+        TempData[result.Success ? "SuccessMessage" : "ErrorMessage"] =
+            result.Success ? $"Trigger type changed to {NewTriggerType}." : result.ErrorMessage;
+        return RedirectToPage(new { id = Id });
+    }
+
     public async Task<IActionResult> OnPostSaveTriggerAsync(CancellationToken ct)
     {
         Definition = await _api.GetDefinitionAsync(Id, ct);
@@ -85,6 +104,62 @@ public sealed class EditModel : PageModel
         }
 
         TempData["ErrorMessage"] = result.ErrorMessage;
+        return RedirectToPage(new { id = Id });
+    }
+
+    // Add step
+    [BindProperty] public string? AddStepKey { get; set; }
+    [BindProperty] public string? AddStepType { get; set; }
+
+    public static readonly string[] StepTypes = ["HttpRequest", "SendWebhook", "Transform", "Conditional", "Delay"];
+
+    public async Task<IActionResult> OnPostAddStepAsync(CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(AddStepKey) || string.IsNullOrWhiteSpace(AddStepType))
+        {
+            TempData["ErrorMessage"] = "Step key and type are required.";
+            return RedirectToPage(new { id = Id });
+        }
+
+        var result = await _api.AddStepAsync(Id, AddStepKey, AddStepType, ct);
+
+        TempData[result.Success ? "SuccessMessage" : "ErrorMessage"] =
+            result.Success ? $"Step '{AddStepKey}' added." : result.ErrorMessage;
+        return RedirectToPage(new { id = Id });
+    }
+
+    [BindProperty] public string? ActionStepKey { get; set; }
+
+    public async Task<IActionResult> OnPostRemoveStepAsync(CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(ActionStepKey))
+            return RedirectToPage(new { id = Id });
+
+        var result = await _api.RemoveStepAsync(Id, ActionStepKey, ct);
+        TempData[result.Success ? "SuccessMessage" : "ErrorMessage"] =
+            result.Success ? $"Step '{ActionStepKey}' removed." : result.ErrorMessage;
+        return RedirectToPage(new { id = Id });
+    }
+
+    public async Task<IActionResult> OnPostMoveStepUpAsync(CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(ActionStepKey))
+            return RedirectToPage(new { id = Id });
+
+        var result = await _api.MoveStepUpAsync(Id, ActionStepKey, ct);
+        TempData[result.Success ? "SuccessMessage" : "ErrorMessage"] =
+            result.Success ? $"Step '{ActionStepKey}' moved up." : result.ErrorMessage;
+        return RedirectToPage(new { id = Id });
+    }
+
+    public async Task<IActionResult> OnPostMoveStepDownAsync(CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(ActionStepKey))
+            return RedirectToPage(new { id = Id });
+
+        var result = await _api.MoveStepDownAsync(Id, ActionStepKey, ct);
+        TempData[result.Success ? "SuccessMessage" : "ErrorMessage"] =
+            result.Success ? $"Step '{ActionStepKey}' moved down." : result.ErrorMessage;
         return RedirectToPage(new { id = Id });
     }
 
