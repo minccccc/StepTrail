@@ -13,23 +13,31 @@ public sealed class HttpRequestStepConfiguration
         string url,
         string method = "POST",
         IReadOnlyDictionary<string, string>? headers = null,
-        string? body = null)
+        string? body = null,
+        int? timeoutSeconds = null,
+        HttpResponseClassificationConfiguration? responseClassification = null)
     {
         if (string.IsNullOrWhiteSpace(url))
             throw new ArgumentException("HTTP request URL must not be empty.", nameof(url));
         if (string.IsNullOrWhiteSpace(method))
             throw new ArgumentException("HTTP request method must not be empty.", nameof(method));
+        if (timeoutSeconds is < 1)
+            throw new ArgumentOutOfRangeException(nameof(timeoutSeconds), "HTTP request timeout must be 1 second or greater when specified.");
 
         Url = url.Trim();
         Method = method.Trim().ToUpperInvariant();
         Headers = NormalizeHeaders(headers, nameof(headers));
         Body = body;
+        TimeoutSeconds = timeoutSeconds;
+        ResponseClassification = responseClassification;
     }
 
     public string Url { get; private set; }
     public string Method { get; private set; }
     public Dictionary<string, string> Headers { get; private set; }
     public string? Body { get; private set; }
+    public int? TimeoutSeconds { get; private set; }
+    public HttpResponseClassificationConfiguration? ResponseClassification { get; private set; }
 
     private static Dictionary<string, string> NormalizeHeaders(
         IReadOnlyDictionary<string, string>? headers,

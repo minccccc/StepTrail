@@ -166,7 +166,7 @@ public sealed class StepDefinition
         if (configuredCount != 1)
             throw new ArgumentException(
                 "Step definition must contain exactly one type-specific configuration.",
-                nameof(type));
+                "configuration");
 
         var hasMatchingConfiguration = type switch
         {

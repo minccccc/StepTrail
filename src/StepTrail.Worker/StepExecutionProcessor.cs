@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using StepTrail.Shared;
@@ -7,11 +6,12 @@ using StepTrail.Shared.Entities;
 using StepTrail.Shared.Runtime;
 using StepTrail.Shared.Workflows;
 using StepTrail.Worker.Handlers;
+using StepTrail.Worker.StepExecutors;
 
 namespace StepTrail.Worker;
 
 /// <summary>
-/// Executes a claimed step execution: resolves the handler, runs it, and persists the outcome.
+/// Executes a claimed step execution: resolves the step executor, runs it, and persists the outcome.
 /// On success, schedules the next step or completes the workflow if this was the last step.
 /// On failure or timeout, delegates to StepFailureService which applies the retry policy.
 /// Maintains a heartbeat (StepLeaseRenewer) during execution so healthy steps are never
@@ -19,10 +19,12 @@ namespace StepTrail.Worker;
 /// </summary>
 public sealed class StepExecutionProcessor
 {
-    private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web);
+    private const int DefaultExecutableMaxAttempts = 3;
+    private const int DefaultExecutableRetryDelaySeconds = 10;
 
     private readonly StepTrailDbContext _db;
     private readonly IServiceProvider _serviceProvider;
+    private readonly IStepExecutorRegistry _stepExecutorRegistry;
     private readonly StepFailureService _failureService;
     private readonly ILogger<StepExecutionProcessor> _logger;
     private readonly TimeSpan _heartbeatInterval;
@@ -31,12 +33,14 @@ public sealed class StepExecutionProcessor
     public StepExecutionProcessor(
         StepTrailDbContext db,
         IServiceProvider serviceProvider,
+        IStepExecutorRegistry stepExecutorRegistry,
         StepFailureService failureService,
         IConfiguration configuration,
         ILogger<StepExecutionProcessor> logger)
     {
         _db = db;
         _serviceProvider = serviceProvider;
+        _stepExecutorRegistry = stepExecutorRegistry;
         _failureService = failureService;
         _logger = logger;
         _heartbeatInterval = TimeSpan.FromSeconds(
@@ -64,23 +68,29 @@ public sealed class StepExecutionProcessor
         string? output = null;
         string? error = null;
         bool timedOut = false;
+        var continuation = StepExecutionContinuation.ContinueWorkflow;
+        DateTimeOffset? resumeAtUtc = null;
 
         try
         {
-            var handler = _serviceProvider.GetKeyedService<IStepHandler>(runtimeDefinition.HandlerKey)
+            var executor = _serviceProvider.GetKeyedService<IStepExecutor>(runtimeDefinition.ExecutorKey)
                 ?? throw new InvalidOperationException(
-                    $"No handler registered for step type '{runtimeDefinition.HandlerKey}'.");
+                    $"No step executor registered for key '{runtimeDefinition.ExecutorKey}'.");
 
             var (workflowState, secretValues) = await BuildExecutionContextAsync(
                 execution.WorkflowInstanceId, ct);
 
-            var context = new StepContext
+            var request = new StepExecutionRequest
             {
                 WorkflowInstanceId = execution.WorkflowInstanceId,
                 StepExecutionId = execution.Id,
+                WorkflowDefinitionKey = runtimeDefinition.WorkflowKey,
+                WorkflowDefinitionVersion = runtimeDefinition.WorkflowVersion,
                 StepKey = execution.StepKey,
                 Input = execution.Input,
-                Config = runtimeDefinition.Config,
+                CurrentOutput = execution.Output,
+                StepType = execution.StepType,
+                StepConfiguration = runtimeDefinition.Config,
                 State = workflowState,
                 Secrets = secretValues
             };
@@ -101,8 +111,25 @@ public sealed class StepExecutionProcessor
 
             try
             {
-                var result = await handler.ExecuteAsync(context, executionToken);
-                output = result.Output;
+                var result = await executor.ExecuteAsync(request, executionToken);
+                if (result.IsSuccess)
+                {
+                    output = result.Output;
+                    continuation = result.Continuation;
+                    resumeAtUtc = result.ResumeAtUtc;
+                }
+                else
+                {
+                    output = result.Output;
+                    error = result.Failure!.Message;
+
+                    _logger.LogWarning(
+                        "Step {StepKey} (execution {ExecutionId}) returned classified failure {Classification}: {Message}",
+                        execution.StepKey,
+                        execution.Id,
+                        result.Failure.Classification,
+                        result.Failure.Message);
+                }
             }
             finally
             {
@@ -121,14 +148,6 @@ public sealed class StepExecutionProcessor
                 "Step {StepKey} (execution {ExecutionId}) timed out after {Timeout}s",
                 execution.StepKey, execution.Id, runtimeDefinition.TimeoutSeconds.Value);
         }
-        catch (HttpActivityException ex)
-        {
-            error = ex.Message;
-            output = ex.ResponseOutput;
-            _logger.LogWarning(
-                "Step {StepKey} (execution {ExecutionId}) received non-2xx HTTP response",
-                execution.StepKey, execution.Id);
-        }
         catch (Exception ex)
         {
             error = ex.Message;
@@ -140,7 +159,7 @@ public sealed class StepExecutionProcessor
         now = DateTimeOffset.UtcNow;
 
         if (error is null)
-            await PersistSuccessAsync(execution, runtimeDefinition, output, now, ct);
+            await PersistSuccessAsync(execution, runtimeDefinition, output, continuation, resumeAtUtc, now, ct);
         else
             await _failureService.HandleAsync(
                 execution,
@@ -158,9 +177,42 @@ public sealed class StepExecutionProcessor
         WorkflowStepExecution execution,
         ResolvedStepExecutionDefinition runtimeDefinition,
         string? output,
+        StepExecutionContinuation continuation,
+        DateTimeOffset? resumeAtUtc,
         DateTimeOffset now,
         CancellationToken ct)
     {
+        if (resumeAtUtc.HasValue)
+        {
+            execution.Status = WorkflowStepExecutionStatus.Waiting;
+            execution.Output = output;
+            execution.Error = null;
+            execution.ScheduledAt = resumeAtUtc.Value;
+            execution.LockedAt = null;
+            execution.LockedBy = null;
+            execution.LockExpiresAt = null;
+            execution.CompletedAt = null;
+            execution.UpdatedAt = now;
+
+            _db.WorkflowEvents.Add(new WorkflowEvent
+            {
+                Id = Guid.NewGuid(),
+                WorkflowInstanceId = execution.WorkflowInstanceId,
+                StepExecutionId = execution.Id,
+                EventType = WorkflowEventTypes.StepWaiting,
+                CreatedAt = now,
+                Payload = output
+            });
+
+            _logger.LogInformation(
+                "Step {StepKey} entered Waiting until {ResumeAtUtc:O}",
+                execution.StepKey,
+                resumeAtUtc.Value);
+
+            await _db.SaveChangesAsync(ct);
+            return;
+        }
+
         execution.Status = WorkflowStepExecutionStatus.Completed;
         execution.Output = output;
         execution.CompletedAt = now;
@@ -174,6 +226,27 @@ public sealed class StepExecutionProcessor
             EventType = WorkflowEventTypes.StepCompleted,
             CreatedAt = now
         });
+
+        if (continuation != StepExecutionContinuation.ContinueWorkflow)
+        {
+            var finalStatus = continuation == StepExecutionContinuation.CancelWorkflow
+                ? WorkflowInstanceStatus.Cancelled
+                : WorkflowInstanceStatus.Completed;
+            var eventType = continuation == StepExecutionContinuation.CancelWorkflow
+                ? WorkflowEventTypes.WorkflowCancelled
+                : WorkflowEventTypes.WorkflowCompleted;
+
+            await FinalizeWorkflowInstanceWithStatusAsync(
+                execution.WorkflowInstanceId,
+                execution.StepKey,
+                finalStatus,
+                eventType,
+                now,
+                ct);
+
+            await _db.SaveChangesAsync(ct);
+            return;
+        }
 
         if (runtimeDefinition.UseMaterializedSteps)
         {
@@ -192,7 +265,7 @@ public sealed class StepExecutionProcessor
                 nextStepExecution.UpdatedAt = now;
 
                 _logger.LogInformation(
-                    "Step {StepKey} completed — next materialized step {NextStepKey} scheduled",
+                    "Step {StepKey} completed - next materialized step {NextStepKey} scheduled",
                     execution.StepKey, nextStepExecution.StepKey);
             }
             else
@@ -229,7 +302,7 @@ public sealed class StepExecutionProcessor
             });
 
             _logger.LogInformation(
-                "Step {StepKey} completed — next step {NextStepKey} scheduled",
+                "Step {StepKey} completed - next step {NextStepKey} scheduled",
                 execution.StepKey, nextStepDef.StepKey);
         }
         else
@@ -265,8 +338,39 @@ public sealed class StepExecutionProcessor
         });
 
         _logger.LogInformation(
-            "Step {StepKey} completed — workflow instance {InstanceId} is now Completed",
+            "Step {StepKey} completed - workflow instance {InstanceId} is now Completed",
             stepKey, workflowInstanceId);
+    }
+
+    private async Task FinalizeWorkflowInstanceWithStatusAsync(
+        Guid workflowInstanceId,
+        string stepKey,
+        WorkflowInstanceStatus finalStatus,
+        string eventType,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var instance = await _db.WorkflowInstances
+            .FindAsync([workflowInstanceId], ct)
+            ?? throw new InvalidOperationException(
+                $"WorkflowInstance {workflowInstanceId} not found.");
+
+        instance.Status = finalStatus;
+        instance.CompletedAt = now;
+        instance.UpdatedAt = now;
+
+        _db.WorkflowEvents.Add(new WorkflowEvent
+        {
+            Id = Guid.NewGuid(),
+            WorkflowInstanceId = workflowInstanceId,
+            StepExecutionId = null,
+            EventType = eventType,
+            CreatedAt = now
+        });
+
+        _logger.LogInformation(
+            "Step {StepKey} completed - workflow instance {InstanceId} is now {Status}",
+            stepKey, workflowInstanceId, finalStatus);
     }
 
     private async Task<ResolvedStepExecutionDefinition> ResolveRuntimeDefinitionAsync(
@@ -294,6 +398,7 @@ public sealed class StepExecutionProcessor
                 RetryDelaySeconds: stepDef.RetryDelaySeconds,
                 TimeoutSeconds: stepDef.TimeoutSeconds,
                 WorkflowKey: instance.WorkflowDefinitionKey ?? await ResolveLegacyWorkflowKeyAsync(stepDef.WorkflowDefinitionId, ct),
+                WorkflowVersion: instance.WorkflowDefinitionVersion,
                 UseMaterializedSteps: false,
                 LegacyWorkflowDefinitionId: stepDef.WorkflowDefinitionId);
         }
@@ -306,31 +411,25 @@ public sealed class StepExecutionProcessor
             throw new InvalidOperationException(
                 $"Executable step execution {execution.Id} has unknown step type '{execution.StepType}'.");
 
-        var (handlerKey, config) = stepType switch
-        {
-            StepType.HttpRequest => (nameof(HttpActivityHandler), execution.StepConfiguration),
-            StepType.SendWebhook => (nameof(HttpActivityHandler), ConvertSendWebhookToHttpActivityConfig(execution.StepConfiguration)),
-            StepType.Transform => throw new InvalidOperationException("No executor is registered yet for executable step type 'Transform'."),
-            StepType.Conditional => throw new InvalidOperationException("No executor is registered yet for executable step type 'Conditional'."),
-            StepType.Delay => throw new InvalidOperationException("No executor is registered yet for executable step type 'Delay'."),
-            _ => throw new InvalidOperationException($"Unsupported executable step type '{stepType}'.")
-        };
+        var resolvedExecutor = _stepExecutorRegistry.Resolve(stepType, execution.StepConfiguration);
 
         return new ResolvedStepExecutionDefinition(
-            handlerKey,
-            config,
+            resolvedExecutor.ExecutorKey,
+            resolvedExecutor.StepConfiguration,
             execution.StepOrder.Value,
-            MaxAttempts: 1,
-            RetryDelaySeconds: 0,
+            // Temporary executable-step defaults until Phase 6 introduces full retry policy handling.
+            MaxAttempts: DefaultExecutableMaxAttempts,
+            RetryDelaySeconds: DefaultExecutableRetryDelaySeconds,
             TimeoutSeconds: null,
             WorkflowKey: instance.WorkflowDefinitionKey ?? execution.WorkflowInstanceId.ToString(),
+            WorkflowVersion: instance.WorkflowDefinitionVersion,
             UseMaterializedSteps: true,
             LegacyWorkflowDefinitionId: null);
     }
 
     /// <summary>
     /// Assembles the WorkflowState and pre-loads all secrets needed for placeholder resolution.
-    /// Called once per step execution before invoking the step handler.
+    /// Called once per step execution before invoking the step executor.
     /// </summary>
     private async Task<(WorkflowState state, IReadOnlyDictionary<string, string> secrets)> BuildExecutionContextAsync(
         Guid instanceId,
@@ -361,41 +460,15 @@ public sealed class StepExecutionProcessor
         return definition?.Key ?? workflowDefinitionId.ToString();
     }
 
-    private static string? ConvertSendWebhookToHttpActivityConfig(string? stepConfiguration)
-    {
-        if (string.IsNullOrWhiteSpace(stepConfiguration))
-            return stepConfiguration;
-
-        var configuration = JsonSerializer.Deserialize<SendWebhookStepConfigurationSnapshot>(stepConfiguration, JsonSerializerOptions)
-            ?? throw new InvalidOperationException("Failed to deserialize send webhook step configuration.");
-
-        var httpActivityConfig = new
-        {
-            Url = configuration.WebhookUrl,
-            Method = configuration.Method ?? "POST",
-            Headers = configuration.Headers,
-            Body = configuration.Body
-        };
-
-        return JsonSerializer.Serialize(httpActivityConfig, JsonSerializerOptions);
-    }
-
     private sealed record ResolvedStepExecutionDefinition(
-        string HandlerKey,
+        string ExecutorKey,
         string? Config,
         int StepOrder,
         int MaxAttempts,
         int RetryDelaySeconds,
         int? TimeoutSeconds,
         string WorkflowKey,
+        int? WorkflowVersion,
         bool UseMaterializedSteps,
         Guid? LegacyWorkflowDefinitionId);
-
-    private sealed class SendWebhookStepConfigurationSnapshot
-    {
-        public string WebhookUrl { get; set; } = string.Empty;
-        public string? Method { get; set; }
-        public Dictionary<string, string>? Headers { get; set; }
-        public string? Body { get; set; }
-    }
 }

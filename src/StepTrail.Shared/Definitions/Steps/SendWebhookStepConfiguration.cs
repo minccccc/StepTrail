@@ -13,23 +13,28 @@ public sealed class SendWebhookStepConfiguration
         string webhookUrl,
         string method = "POST",
         IReadOnlyDictionary<string, string>? headers = null,
-        string? body = null)
+        string? body = null,
+        int? timeoutSeconds = null)
     {
         if (string.IsNullOrWhiteSpace(webhookUrl))
             throw new ArgumentException("Webhook URL must not be empty.", nameof(webhookUrl));
         if (string.IsNullOrWhiteSpace(method))
             throw new ArgumentException("Webhook method must not be empty.", nameof(method));
+        if (timeoutSeconds.HasValue && timeoutSeconds.Value < 1)
+            throw new ArgumentOutOfRangeException(nameof(timeoutSeconds), "Webhook timeout must be 1 second or greater.");
 
         WebhookUrl = webhookUrl.Trim();
         Method = method.Trim().ToUpperInvariant();
         Headers = NormalizeHeaders(headers, nameof(headers));
         Body = body;
+        TimeoutSeconds = timeoutSeconds;
     }
 
     public string WebhookUrl { get; private set; }
     public string Method { get; private set; }
     public Dictionary<string, string> Headers { get; private set; }
     public string? Body { get; private set; }
+    public int? TimeoutSeconds { get; private set; }
 
     private static Dictionary<string, string> NormalizeHeaders(
         IReadOnlyDictionary<string, string>? headers,

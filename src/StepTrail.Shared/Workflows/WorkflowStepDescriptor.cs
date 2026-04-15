@@ -71,8 +71,8 @@ public sealed class WorkflowStepDescriptor
     public int? TimeoutSeconds { get; }
 
     /// <summary>
-    /// Handler-specific configuration serialized as JSON.
-    /// Passed to the handler at runtime via StepContext.Config.
+    /// Step-executor-specific configuration serialized as JSON.
+    /// Passed to the executor at runtime via StepExecutionRequest.StepConfiguration.
     /// </summary>
     public string? Config { get; }
 }

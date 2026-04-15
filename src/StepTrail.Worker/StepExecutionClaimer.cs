@@ -28,17 +28,18 @@ public sealed class StepExecutionClaimer
     {
         var now = DateTimeOffset.UtcNow;
         var pendingStatus = WorkflowStepExecutionStatus.Pending.ToString();
+        var waitingStatus = WorkflowStepExecutionStatus.Waiting.ToString();
 
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
         try
         {
-            // Atomically find the oldest due Pending execution and lock the row.
+            // Atomically find the oldest due Pending or Waiting execution and lock the row.
             // SKIP LOCKED means concurrent workers skip rows already being claimed.
             var execution = await _db.WorkflowStepExecutions
                 .FromSqlInterpolated($"""
                     SELECT * FROM workflow_step_executions
-                    WHERE status = {pendingStatus}
+                    WHERE (status = {pendingStatus} OR status = {waitingStatus})
                       AND scheduled_at <= {now}
                     ORDER BY scheduled_at ASC
                     LIMIT 1
@@ -52,12 +53,12 @@ public sealed class StepExecutionClaimer
                 return null;
             }
 
-            // Transition step execution: Pending → Running
+            // Transition step execution: Pending or Waiting -> Running
             execution.Status = WorkflowStepExecutionStatus.Running;
             execution.LockedAt = now;
             execution.LockedBy = workerId;
             execution.LockExpiresAt = now.AddSeconds(_defaultLockExpirySeconds);
-            execution.StartedAt = now;
+            execution.StartedAt ??= now;
             execution.UpdatedAt = now;
 
             // Transition parent instance: Pending → Running (first time only)

@@ -68,7 +68,7 @@ public class AvailableFieldsServiceTests
     // ── HttpRequest prior step ────────────────────────────────────────────────
 
     [Fact]
-    public void GetAvailableFields_HttpRequestPriorStep_ReturnsThreeFields()
+    public void GetAvailableFields_HttpRequestPriorStep_ReturnsFiveFields()
     {
         var def = MakeDefinition(HttpStep("fetch-order", 1), HttpStep("enrich", 2));
 
@@ -77,7 +77,7 @@ public class AvailableFieldsServiceTests
         var group = Assert.Single(result.Steps);
         Assert.Equal("fetch-order", group.StepKey);
         Assert.Equal("HttpRequest", group.StepType);
-        Assert.Equal(3, group.Fields.Count);
+        Assert.Equal(5, group.Fields.Count);
     }
 
     [Fact]
@@ -89,30 +89,35 @@ public class AvailableFieldsServiceTests
 
         var fields = result.Steps[0].Fields;
         Assert.Contains(fields, f => f.Placeholder == "{{steps.fetch-order.output.statusCode}}" && f.FieldType == "number");
-        Assert.Contains(fields, f => f.Placeholder == "{{steps.fetch-order.output.body}}"       && f.FieldType == "string");
+        Assert.Contains(fields, f => f.Placeholder == "{{steps.fetch-order.output.body}}"       && f.FieldType == "object");
+        Assert.Contains(fields, f => f.Placeholder == "{{steps.fetch-order.output.bodyText}}"   && f.FieldType == "string");
+        Assert.Contains(fields, f => f.Placeholder == "{{steps.fetch-order.output.contentType}}"&& f.FieldType == "string");
         Assert.Contains(fields, f => f.Placeholder == "{{steps.fetch-order.output.headers}}"    && f.FieldType == "object");
     }
 
-    // ── SendWebhook uses the same output schema as HttpRequest ────────────────
+    // ── SendWebhook exposes delivery-focused output fields ────────────────────
 
     [Fact]
-    public void GetAvailableFields_SendWebhookPriorStep_ReturnsSameFieldsAsHttpRequest()
+    public void GetAvailableFields_SendWebhookPriorStep_ReturnsDeliveryFields()
     {
-        var httpDef    = MakeDefinition(HttpStep("s1", 1), HttpStep("target", 2));
         var webhookDef = MakeDefinition(SendWebhookStep("s1", 1), HttpStep("target", 2));
 
-        var httpResult    = AvailableFieldsService.GetAvailableFields(httpDef,    "target", []);
         var webhookResult = AvailableFieldsService.GetAvailableFields(webhookDef, "target", []);
 
-        Assert.Equal(
-            httpResult.Steps[0].Fields.Select(f => f.Placeholder).Order(),
-            webhookResult.Steps[0].Fields.Select(f => f.Placeholder).Order());
+        var group = Assert.Single(webhookResult.Steps);
+        Assert.Equal("s1", group.StepKey);
+        Assert.Equal("SendWebhook", group.StepType);
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.s1.output.delivered}}" && f.FieldType == "boolean");
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.s1.output.statusCode}}" && f.FieldType == "number");
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.s1.output.destination}}" && f.FieldType == "string");
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.s1.output.attemptedAtUtc}}" && f.FieldType == "string");
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.s1.output.responseBodyText}}" && f.FieldType == "string");
     }
 
-    // ── Delay produces no output fields ──────────────────────────────────────
+    // ── Delay exposes waiting metadata for downstream inspection ─────────────
 
     [Fact]
-    public void GetAvailableFields_DelayPriorStep_ReturnsEmptyFields()
+    public void GetAvailableFields_DelayPriorStep_ReturnsWaitingFields()
     {
         var def = MakeDefinition(DelayStep("wait", 1), HttpStep("next", 2));
 
@@ -121,7 +126,32 @@ public class AvailableFieldsServiceTests
         var group = Assert.Single(result.Steps);
         Assert.Equal("wait", group.StepKey);
         Assert.Equal("Delay", group.StepType);
-        Assert.Empty(group.Fields);
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.wait.output.delayType}}" && f.FieldType == "string");
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.wait.output.requestedDuration}}" && f.FieldType == "string");
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.wait.output.resumeAtUtc}}" && f.FieldType == "string");
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.wait.output.targetTimeUtc}}" && f.FieldType == "string");
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.wait.output.wasImmediate}}" && f.FieldType == "boolean");
+    }
+
+    [Fact]
+    public void GetAvailableFields_ConditionalPriorStep_ReturnsDecisionFields()
+    {
+        var def = MakeDefinition(
+            StepDefinition.CreateConditional(
+                Guid.NewGuid(),
+                "check-status",
+                1,
+                new ConditionalStepConfiguration("$.status", ConditionalOperator.Equals, "ready")),
+            HttpStep("next", 2));
+
+        var result = AvailableFieldsService.GetAvailableFields(def, "next", []);
+
+        var group = Assert.Single(result.Steps);
+        Assert.Equal("check-status", group.StepKey);
+        Assert.Equal("Conditional", group.StepType);
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.check-status.output.matched}}" && f.FieldType == "boolean");
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.check-status.output.actualValue}}");
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.check-status.output.falseOutcome}}");
     }
 
     // ── Transform output fields derived from mapping targets ──────────────────
@@ -141,6 +171,20 @@ public class AvailableFieldsServiceTests
         Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.map-data.output.orderId}}");
         Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.map-data.output.customerName}}");
         Assert.Equal(2, group.Fields.Count);
+    }
+
+    [Fact]
+    public void GetAvailableFields_TransformPriorStep_NormalizesLegacyTargetPaths()
+    {
+        var def = MakeDefinition(
+            TransformStep("map-data", 1, ("$.payload.customerId", "{{input.id}}"), ("$.payload.name", "{{input.name}}")),
+            HttpStep("send", 2));
+
+        var result = AvailableFieldsService.GetAvailableFields(def, "send", []);
+
+        var group = Assert.Single(result.Steps);
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.map-data.output.payload.customerId}}");
+        Assert.Contains(group.Fields, f => f.Placeholder == "{{steps.map-data.output.payload.name}}");
     }
 
     // ── Multiple prior steps returned in order ────────────────────────────────

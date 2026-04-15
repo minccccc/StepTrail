@@ -39,9 +39,10 @@ public class WorkflowDefinitionStep
     public int? TimeoutSeconds { get; set; }
 
     /// <summary>
-    /// Handler-specific configuration stored as JSON.
-    /// Passed to the handler via StepContext.Config so each handler type can define its own shape.
-    /// Example: HttpActivityHandler reads Url, Method, Headers, and Body from this field.
+    /// Executor-specific configuration stored as JSON.
+    /// Passed to the step executor via StepExecutionRequest.StepConfiguration so each
+    /// executor type can define its own shape. Example: HttpActivityHandler reads Url,
+    /// Method, Headers, and Body from this field.
     /// </summary>
     public string? Config { get; set; }
 

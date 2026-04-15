@@ -4,6 +4,7 @@ public static class WorkflowEventTypes
 {
     public const string WorkflowStarted   = "WorkflowStarted";
     public const string StepStarted       = "StepStarted";
+    public const string StepWaiting       = "StepWaiting";
     public const string StepCompleted     = "StepCompleted";
     public const string StepFailed        = "StepFailed";
     public const string StepRetryScheduled = "StepRetryScheduled";

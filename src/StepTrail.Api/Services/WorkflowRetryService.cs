@@ -204,6 +204,7 @@ public sealed class WorkflowRetryService
             var pendingSteps = await _db.WorkflowStepExecutions
                 .Where(e => e.WorkflowInstanceId == instanceId
                          && (e.Status == WorkflowStepExecutionStatus.Pending
+                             || e.Status == WorkflowStepExecutionStatus.Waiting
                              || e.Status == WorkflowStepExecutionStatus.NotStarted))
                 .ToListAsync(ct);
 
@@ -266,6 +267,7 @@ public sealed class WorkflowRetryService
             var pendingSteps = await _db.WorkflowStepExecutions
                 .Where(e => e.WorkflowInstanceId == instanceId
                          && (e.Status == WorkflowStepExecutionStatus.Pending
+                             || e.Status == WorkflowStepExecutionStatus.Waiting
                              || e.Status == WorkflowStepExecutionStatus.NotStarted))
                 .ToListAsync(ct);
 

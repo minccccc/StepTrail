@@ -2,19 +2,19 @@ using StepTrail.Shared.Workflows;
 
 namespace StepTrail.Worker.Handlers;
 
-public sealed class NotifyTeamHandler : IStepHandler
+public sealed class NotifyTeamHandler : IStepExecutor
 {
     private readonly ILogger<NotifyTeamHandler> _logger;
 
     public NotifyTeamHandler(ILogger<NotifyTeamHandler> logger)
         => _logger = logger;
 
-    public Task<StepResult> ExecuteAsync(StepContext context, CancellationToken ct)
+    public Task<StepExecutionResult> ExecuteAsync(StepExecutionRequest request, CancellationToken ct)
     {
         _logger.LogInformation(
             "Notifying team for workflow instance {InstanceId}",
-            context.WorkflowInstanceId);
+            request.WorkflowInstanceId);
 
-        return Task.FromResult(StepResult.Success());
+        return Task.FromResult(StepExecutionResult.Success());
     }
 }

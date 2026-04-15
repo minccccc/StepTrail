@@ -4,7 +4,7 @@ namespace StepTrail.Shared.Runtime.AvailableFields;
 
 /// <summary>
 /// All placeholder fields contributed by a single prior step's output.
-/// Empty <see cref="Fields"/> means the step type produces no output (e.g. Delay, Conditional).
+/// Empty <see cref="Fields"/> means the step type produces no output.
 /// </summary>
 public sealed class StepFieldGroup
 {

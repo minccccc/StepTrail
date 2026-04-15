@@ -2,19 +2,19 @@ using StepTrail.Shared.Workflows;
 
 namespace StepTrail.Worker.Handlers;
 
-public sealed class ProvisionAccountHandler : IStepHandler
+public sealed class ProvisionAccountHandler : IStepExecutor
 {
     private readonly ILogger<ProvisionAccountHandler> _logger;
 
     public ProvisionAccountHandler(ILogger<ProvisionAccountHandler> logger)
         => _logger = logger;
 
-    public Task<StepResult> ExecuteAsync(StepContext context, CancellationToken ct)
+    public Task<StepExecutionResult> ExecuteAsync(StepExecutionRequest request, CancellationToken ct)
     {
         _logger.LogInformation(
             "Provisioning account for workflow instance {InstanceId}",
-            context.WorkflowInstanceId);
+            request.WorkflowInstanceId);
 
-        return Task.FromResult(StepResult.Success());
+        return Task.FromResult(StepExecutionResult.Success());
     }
 }

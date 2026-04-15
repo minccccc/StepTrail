@@ -473,32 +473,91 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
     private static HttpRequestStepConfiguration DeserializeHttpRequestStepConfiguration(string json)
     {
         var dto = DeserializeDto<HttpRequestStepConfigurationDto>(json, "http request step configuration");
-        return new HttpRequestStepConfiguration(dto.Url, dto.Method ?? "POST", dto.Headers, dto.Body);
+        var responseClassification = dto.ResponseClassification is null
+            ? null
+            : new HttpResponseClassificationConfiguration(
+                dto.ResponseClassification.SuccessStatusCodes,
+                dto.ResponseClassification.RetryableStatusCodes);
+
+        return new HttpRequestStepConfiguration(
+            dto.Url,
+            dto.Method ?? "POST",
+            dto.Headers,
+            dto.Body,
+            dto.TimeoutSeconds,
+            responseClassification);
     }
 
     private static TransformStepConfiguration DeserializeTransformStepConfiguration(string json)
     {
         var dto = DeserializeDto<TransformStepConfigurationDto>(json, "transform step configuration");
         return new TransformStepConfiguration(
-            dto.Mappings.Select(mapping => new TransformValueMapping(mapping.TargetPath, mapping.SourcePath)));
+            dto.Mappings.Select(DeserializeTransformValueMapping));
     }
+
+    private static TransformValueMapping DeserializeTransformValueMapping(TransformValueMappingDto mapping)
+    {
+        if (mapping.Operation is not null)
+        {
+            return new TransformValueMapping(
+                mapping.TargetPath,
+                DeserializeTransformValueOperation(mapping.Operation));
+        }
+
+        if (string.IsNullOrWhiteSpace(mapping.SourcePath))
+            throw new InvalidOperationException("Transform value mapping must define sourcePath or operation.");
+
+        return new TransformValueMapping(mapping.TargetPath, mapping.SourcePath);
+    }
+
+    private static TransformValueOperation DeserializeTransformValueOperation(TransformValueOperationDto dto) =>
+        dto.Type switch
+        {
+            TransformOperationType.DefaultValue => TransformValueOperation.CreateDefaultValue(
+                dto.SourcePath ?? throw new InvalidOperationException("Default value transform operation requires sourcePath."),
+                dto.DefaultValue ?? throw new InvalidOperationException("Default value transform operation requires defaultValue.")),
+            TransformOperationType.Concatenate => TransformValueOperation.CreateConcatenate(
+                dto.Parts ?? throw new InvalidOperationException("Concatenate transform operation requires parts.")),
+            TransformOperationType.FormatString => TransformValueOperation.CreateFormatString(
+                dto.Template ?? throw new InvalidOperationException("Format string transform operation requires template."),
+                dto.Arguments ?? throw new InvalidOperationException("Format string transform operation requires arguments.")),
+            _ => throw new InvalidOperationException($"Unsupported transform operation type '{dto.Type}'.")
+        };
 
     private static ConditionalStepConfiguration DeserializeConditionalStepConfiguration(string json)
     {
         var dto = DeserializeDto<ConditionalStepConfigurationDto>(json, "conditional step configuration");
-        return new ConditionalStepConfiguration(dto.ConditionExpression);
+        if (!string.IsNullOrWhiteSpace(dto.SourcePath))
+        {
+            return new ConditionalStepConfiguration(
+                dto.SourcePath,
+                dto.Operator,
+                dto.ExpectedValue,
+                dto.FalseOutcome);
+        }
+
+        return new ConditionalStepConfiguration(
+            dto.ConditionExpression,
+            dto.FalseOutcome);
     }
 
     private static DelayStepConfiguration DeserializeDelayStepConfiguration(string json)
     {
         var dto = DeserializeDto<DelayStepConfigurationDto>(json, "delay step configuration");
-        return new DelayStepConfiguration(dto.DelaySeconds);
+
+        if (dto.DelaySeconds.HasValue)
+            return new DelayStepConfiguration(dto.DelaySeconds.Value);
+
+        if (!string.IsNullOrWhiteSpace(dto.TargetTimeExpression))
+            return new DelayStepConfiguration(dto.TargetTimeExpression);
+
+        throw new InvalidOperationException("Delay step configuration must define either delaySeconds or targetTimeExpression.");
     }
 
     private static SendWebhookStepConfiguration DeserializeSendWebhookStepConfiguration(string json)
     {
         var dto = DeserializeDto<SendWebhookStepConfigurationDto>(json, "send webhook step configuration");
-        return new SendWebhookStepConfiguration(dto.WebhookUrl, dto.Method ?? "POST", dto.Headers, dto.Body);
+        return new SendWebhookStepConfiguration(dto.WebhookUrl, dto.Method ?? "POST", dto.Headers, dto.Body, dto.TimeoutSeconds);
     }
 
     private static TDto DeserializeDto<TDto>(string json, string configurationDescription)
@@ -559,6 +618,14 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
         public string? Method { get; set; }
         public Dictionary<string, string>? Headers { get; set; }
         public string? Body { get; set; }
+        public int? TimeoutSeconds { get; set; }
+        public HttpResponseClassificationConfigurationDto? ResponseClassification { get; set; }
+    }
+
+    private sealed class HttpResponseClassificationConfigurationDto
+    {
+        public List<int>? SuccessStatusCodes { get; set; }
+        public List<int>? RetryableStatusCodes { get; set; }
     }
 
     private sealed class TransformStepConfigurationDto
@@ -569,17 +636,33 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
     private sealed class TransformValueMappingDto
     {
         public string TargetPath { get; set; } = string.Empty;
-        public string SourcePath { get; set; } = string.Empty;
+        public string? SourcePath { get; set; }
+        public TransformValueOperationDto? Operation { get; set; }
+    }
+
+    private sealed class TransformValueOperationDto
+    {
+        public TransformOperationType Type { get; set; }
+        public string? SourcePath { get; set; }
+        public string? DefaultValue { get; set; }
+        public string? Template { get; set; }
+        public List<string>? Parts { get; set; }
+        public List<string>? Arguments { get; set; }
     }
 
     private sealed class ConditionalStepConfigurationDto
     {
         public string ConditionExpression { get; set; } = string.Empty;
+        public string? SourcePath { get; set; }
+        public ConditionalOperator Operator { get; set; }
+        public string? ExpectedValue { get; set; }
+        public ConditionalFalseOutcome FalseOutcome { get; set; } = ConditionalFalseOutcome.CompleteWorkflow;
     }
 
     private sealed class DelayStepConfigurationDto
     {
-        public int DelaySeconds { get; set; }
+        public int? DelaySeconds { get; set; }
+        public string? TargetTimeExpression { get; set; }
     }
 
     private sealed class SendWebhookStepConfigurationDto
@@ -588,5 +671,6 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
         public string? Method { get; set; }
         public Dictionary<string, string>? Headers { get; set; }
         public string? Body { get; set; }
+        public int? TimeoutSeconds { get; set; }
     }
 }

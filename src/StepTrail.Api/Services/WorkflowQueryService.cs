@@ -201,7 +201,9 @@ public sealed class WorkflowQueryService
             return null;
 
         var activeStep = stepExecutions
-            .Where(step => step.Status is WorkflowStepExecutionStatus.Pending or WorkflowStepExecutionStatus.Running)
+            .Where(step => step.Status is WorkflowStepExecutionStatus.Pending
+                                        or WorkflowStepExecutionStatus.Waiting
+                                        or WorkflowStepExecutionStatus.Running)
             .OrderBy(step => step.StepOrder ?? int.MaxValue)
             .ThenByDescending(step => step.StartedAt ?? step.CreatedAt)
             .FirstOrDefault();

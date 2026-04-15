@@ -157,6 +157,59 @@ public class WorkflowDefinitionValidatorTests
     }
 
     [Fact]
+    public void ValidateForActivation_ReturnsError_WhenHttpRequestTimeoutIsInvalid()
+    {
+        var httpRequestStep = StepDefinition.CreateHttpRequest(
+            Guid.NewGuid(),
+            "fetch-customer",
+            1,
+            new HttpRequestStepConfiguration("https://api.example.com/customers"));
+        var definition = CreateWorkflowDefinition(stepDefinitions: [httpRequestStep]);
+        SetProperty(httpRequestStep.HttpRequestConfiguration!, nameof(HttpRequestStepConfiguration.TimeoutSeconds), 0);
+
+        var validationResult = _validator.ValidateForActivation(definition);
+
+        Assert.False(validationResult.IsValid);
+        var error = Assert.Single(validationResult.Errors, e => e.Code == "workflow.step.httpRequest.timeout.invalid");
+        Assert.Equal("stepDefinitions[0].httpRequestConfiguration.timeoutSeconds", error.Path);
+    }
+
+    [Fact]
+    public void ValidateForActivation_ReturnsError_WhenHttpRequestResponseClassificationOverlaps()
+    {
+        var httpRequestStep = StepDefinition.CreateHttpRequest(
+            Guid.NewGuid(),
+            "fetch-customer",
+            1,
+            new HttpRequestStepConfiguration("https://api.example.com/customers"));
+        var definition = CreateWorkflowDefinition(stepDefinitions: [httpRequestStep]);
+        var responseClassification = new HttpResponseClassificationConfiguration(
+            successStatusCodes: [200],
+            retryableStatusCodes: [503]);
+
+        SetProperty(
+            responseClassification,
+            nameof(HttpResponseClassificationConfiguration.SuccessStatusCodes),
+            new List<int> { 200, 409 });
+        SetProperty(
+            responseClassification,
+            nameof(HttpResponseClassificationConfiguration.RetryableStatusCodes),
+            new List<int> { 409, 503 });
+        SetProperty(
+            httpRequestStep.HttpRequestConfiguration!,
+            nameof(HttpRequestStepConfiguration.ResponseClassification),
+            responseClassification);
+
+        var validationResult = _validator.ValidateForActivation(definition);
+
+        Assert.False(validationResult.IsValid);
+        var error = Assert.Single(
+            validationResult.Errors,
+            e => e.Code == "workflow.step.httpRequest.responseClassification.overlap.invalid");
+        Assert.Equal("stepDefinitions[0].httpRequestConfiguration.responseClassification", error.Path);
+    }
+
+    [Fact]
     public void ValidateForActivation_ReturnsError_WhenWebhookSignatureValidationConfigurationIsInvalid()
     {
         var triggerDefinition = TriggerDefinition.CreateWebhook(
@@ -261,6 +314,139 @@ public class WorkflowDefinitionValidatorTests
             validationResult.Errors,
             e => e.Code == "workflow.trigger.schedule.cron.invalid");
         Assert.Equal("triggerDefinition.scheduleConfiguration.cronExpression", error.Path);
+    }
+
+    [Fact]
+    public void ValidateForActivation_ReturnsError_WhenConditionalExpectedValueIsMissing()
+    {
+        var conditionalStep = StepDefinition.CreateConditional(
+            Guid.NewGuid(),
+            "check-status",
+            1,
+            new ConditionalStepConfiguration("$.status", ConditionalOperator.Equals, "ready"));
+        var definition = CreateWorkflowDefinition(stepDefinitions: [conditionalStep]);
+
+        SetProperty(
+            conditionalStep.ConditionalConfiguration!,
+            nameof(ConditionalStepConfiguration.ExpectedValue),
+            " ");
+
+        var validationResult = _validator.ValidateForActivation(definition);
+
+        Assert.False(validationResult.IsValid);
+        var error = Assert.Single(
+            validationResult.Errors,
+            e => e.Code == "workflow.step.conditional.expectedValue.required");
+        Assert.Equal("stepDefinitions[0].conditionalConfiguration.expectedValue", error.Path);
+    }
+
+    [Fact]
+    public void ValidateForActivation_ReturnsError_WhenTransformOperationTemplateIsMissing()
+    {
+        var transformStep = StepDefinition.CreateTransform(
+            Guid.NewGuid(),
+            "shape-payload",
+            1,
+            new TransformStepConfiguration(
+            [
+                new TransformValueMapping(
+                    "$.displayName",
+                    TransformValueOperation.CreateFormatString(
+                        "Customer {0}",
+                        ["{{input.customerId}}"]))
+            ]));
+        var definition = CreateWorkflowDefinition(stepDefinitions: [transformStep]);
+
+        SetProperty(
+            transformStep.TransformConfiguration!.Mappings[0].Operation!,
+            nameof(TransformValueOperation.Template),
+            " ");
+
+        var validationResult = _validator.ValidateForActivation(definition);
+
+        Assert.False(validationResult.IsValid);
+        var error = Assert.Single(
+            validationResult.Errors,
+            e => e.Code == "workflow.step.transform.operation.format.template.required");
+        Assert.Equal("stepDefinitions[0].transformConfiguration.mappings[0].operation.template", error.Path);
+    }
+
+    [Fact]
+    public void ValidateForActivation_ReturnsError_WhenTransformTargetPathsConflict()
+    {
+        var definition = CreateWorkflowDefinition(
+            stepDefinitions:
+            [
+                StepDefinition.CreateTransform(
+                    Guid.NewGuid(),
+                    "shape-payload",
+                    1,
+                    new TransformStepConfiguration(
+                    [
+                        new TransformValueMapping("$.status", "$.status"),
+                        new TransformValueMapping("$.status.code", "$.code")
+                    ]))
+            ]);
+
+        var validationResult = _validator.ValidateForActivation(definition);
+
+        Assert.False(validationResult.IsValid);
+        var error = Assert.Single(
+            validationResult.Errors,
+            e => e.Code == "workflow.step.transform.targetPath.conflict");
+        Assert.Equal("stepDefinitions[0].transformConfiguration.mappings", error.Path);
+    }
+
+    [Fact]
+    public void ValidateForActivation_ReturnsError_WhenSendWebhookMethodIsNotPost()
+    {
+        var webhookStep = StepDefinition.CreateSendWebhook(
+            Guid.NewGuid(),
+            "notify-partner",
+            1,
+            new SendWebhookStepConfiguration("https://hooks.example.com/customer-created"));
+        var definition = CreateWorkflowDefinition(stepDefinitions: [webhookStep]);
+
+        SetProperty(
+            webhookStep.SendWebhookConfiguration!,
+            nameof(SendWebhookStepConfiguration.Method),
+            "PUT");
+
+        var validationResult = _validator.ValidateForActivation(definition);
+
+        Assert.False(validationResult.IsValid);
+        var error = Assert.Single(
+            validationResult.Errors,
+            e => e.Code == "workflow.step.sendWebhook.method.unsupported");
+        Assert.Equal("stepDefinitions[0].sendWebhookConfiguration.method", error.Path);
+    }
+
+    [Fact]
+    public void ValidateForActivation_ReturnsError_WhenDelayTargetTimeExpressionIsInvalidLiteral()
+    {
+        var delayStep = StepDefinition.CreateDelay(
+            Guid.NewGuid(),
+            "wait-until-follow-up",
+            1,
+            new DelayStepConfiguration("2026-04-16T08:00:00Z"));
+        var definition = CreateWorkflowDefinition(stepDefinitions: [delayStep]);
+
+        SetProperty(
+            delayStep.DelayConfiguration!,
+            nameof(DelayStepConfiguration.TargetTimeExpression),
+            "tomorrow morning");
+        SetProperty(
+            delayStep.DelayConfiguration!,
+            nameof(DelayStepConfiguration.DelaySeconds),
+            null);
+
+        var validationResult = _validator.ValidateForActivation(definition);
+
+        Assert.False(validationResult.IsValid);
+        var error = Assert.Single(
+            validationResult.Errors,
+            e => e.Code == "workflow.step.delay.targetTimeExpression.invalid");
+        Assert.Equal("stepDefinitions[0].delayConfiguration.targetTimeExpression", error.Path);
     }
 
     private static WorkflowDefinition CreateWorkflowDefinition(

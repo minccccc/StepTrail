@@ -45,20 +45,31 @@ public class WorkflowDefinitionRepositoryIntegrationTests
                     Guid.NewGuid(),
                     "fetch-customer",
                     1,
-                    new HttpRequestStepConfiguration("https://api.example.com/customers")),
+                    new HttpRequestStepConfiguration(
+                        "https://api.example.com/customers",
+                        timeoutSeconds: 15,
+                        responseClassification: new HttpResponseClassificationConfiguration(
+                            retryableStatusCodes: [409, 429]))),
                 StepDefinition.CreateTransform(
                     Guid.NewGuid(),
                     "shape-payload",
                     2,
                     new TransformStepConfiguration(
                     [
-                        new TransformValueMapping("$.customerId", "$.id")
+                        new TransformValueMapping("$.customerId", "$.id"),
+                        new TransformValueMapping(
+                            "$.displayName",
+                            TransformValueOperation.CreateFormatString(
+                                "Customer {0}",
+                                ["{{input.id}}"]))
                     ])),
                 StepDefinition.CreateSendWebhook(
                     Guid.NewGuid(),
                     "notify-partner",
                     3,
-                    new SendWebhookStepConfiguration("https://hooks.example.com/customer-created"),
+                    new SendWebhookStepConfiguration(
+                        "https://hooks.example.com/customer-created",
+                        timeoutSeconds: 10),
                     retryPolicyOverrideKey: "partner-webhook-policy")
             ]);
 
@@ -115,17 +126,23 @@ public class WorkflowDefinitionRepositoryIntegrationTests
                 {
                     Assert.Equal("fetch-customer", step.Key);
                     Assert.Equal(StepType.HttpRequest, step.Type);
+                    Assert.Equal(15, step.HttpRequestConfiguration!.TimeoutSeconds);
+                    Assert.Equal([409, 429], step.HttpRequestConfiguration.ResponseClassification!.RetryableStatusCodes);
                 },
                 step =>
                 {
                     Assert.Equal("shape-payload", step.Key);
                     Assert.Equal(StepType.Transform, step.Type);
+                    Assert.Equal(2, step.TransformConfiguration!.Mappings.Count);
+                    Assert.Equal("Customer {0}", step.TransformConfiguration.Mappings[1].Operation!.Template);
+                    Assert.Equal(TransformOperationType.FormatString, step.TransformConfiguration.Mappings[1].Operation!.Type);
                 },
                 step =>
                 {
                     Assert.Equal("notify-partner", step.Key);
                     Assert.Equal("partner-webhook-policy", step.RetryPolicyOverrideKey);
                     Assert.Equal(StepType.SendWebhook, step.Type);
+                    Assert.Equal(10, step.SendWebhookConfiguration!.TimeoutSeconds);
                 });
         }
     }
@@ -199,7 +216,14 @@ public class WorkflowDefinitionRepositoryIntegrationTests
             Assert.Equal("start-customer-sync", loadedDefinition.TriggerDefinition.ApiConfiguration!.OperationKey);
             Assert.Collection(
                 loadedDefinition.StepDefinitions,
-                step => Assert.Equal(StepType.Conditional, step.Type),
+                step =>
+                {
+                    Assert.Equal(StepType.Conditional, step.Type);
+                    Assert.Equal("$.payload.isReady", step.ConditionalConfiguration!.SourcePath);
+                    Assert.Equal(ConditionalOperator.Equals, step.ConditionalConfiguration.Operator);
+                    Assert.Equal("true", step.ConditionalConfiguration.ExpectedValue);
+                    Assert.Equal(ConditionalFalseOutcome.CompleteWorkflow, step.ConditionalConfiguration.FalseOutcome);
+                },
                 step => Assert.Equal(StepType.SendWebhook, step.Type));
         }
     }
@@ -875,6 +899,45 @@ public class WorkflowDefinitionRepositoryIntegrationTests
         await using (var dbContext = _fixture.CreateDbContext())
         {
             Assert.Empty(await dbContext.ExecutableWorkflowDefinitions.ToListAsync());
+        }
+    }
+
+    [Fact]
+    public async Task CreateDraftAsync_AndGetByIdAsync_RoundTripsDelayUntilConfiguration()
+    {
+        await _fixture.ResetAsync();
+
+        var definition = CreateWorkflowDefinition(
+            version: 1,
+            status: WorkflowDefinitionStatus.Draft,
+            triggerDefinition: TriggerDefinition.CreateManual(
+                Guid.NewGuid(),
+                new ManualTriggerConfiguration("ops-console")),
+            stepDefinitions:
+            [
+                StepDefinition.CreateDelay(
+                    Guid.NewGuid(),
+                    "wait-until-follow-up",
+                    1,
+                    new DelayStepConfiguration("{{input.followUpAtUtc}}"))
+            ]);
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var repository = new WorkflowDefinitionRepository(dbContext);
+            await repository.CreateDraftAsync(definition);
+        }
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var repository = new WorkflowDefinitionRepository(dbContext);
+            var loadedDefinition = await repository.GetByIdAsync(definition.Id);
+
+            Assert.NotNull(loadedDefinition);
+            var delayStep = Assert.Single(loadedDefinition!.StepDefinitions);
+            Assert.Equal(StepType.Delay, delayStep.Type);
+            Assert.Null(delayStep.DelayConfiguration!.DelaySeconds);
+            Assert.Equal("{{input.followUpAtUtc}}", delayStep.DelayConfiguration.TargetTimeExpression);
         }
     }
 
