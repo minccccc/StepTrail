@@ -6,7 +6,10 @@
 
 <div class="d-flex align-items-center justify-content-between mb-3">
     <h1 class="h3 mb-0">Workflow Definitions</h1>
-    <span class="text-muted small">@Model.Definitions.Count definition(s)</span>
+    <div class="d-flex align-items-center gap-2">
+        <span class="text-muted small">@Model.Definitions.Count definition(s)</span>
+        <a href="/ops/definitions/new" class="btn btn-sm btn-primary">+ New Definition</a>
+    </div>
 </div>
 
 @if (Model.ErrorMessage is not null)

@@ -1,0 +1,709 @@
+@page "/ops/definitions/edit"
+@model StepTrail.Api.Pages.Templates.EditModel
+@{
+    ViewData["Title"] = Model.Definition is null
+        ? "Definition Not Found"
+        : $"Edit: {Model.Definition.Name}";
+    var def = Model.Definition;
+}
+
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/ops/definitions">Definitions</a></li>
+        <li class="breadcrumb-item active">Edit</li>
+    </ol>
+</nav>
+
+@if (TempData["SuccessMessage"] is string ok)
+{
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        @ok <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+@if (TempData["ErrorMessage"] is string err)
+{
+    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        @err <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+@if (Model.LoadError is not null)
+{
+    <div class="alert alert-warning">@Model.LoadError</div>
+}
+else if (def is not null)
+{
+    <div class="d-flex align-items-center justify-content-between mb-4">
+        <div>
+            <h1 class="h3 mb-1">
+                @def.Name
+                <span class="badge bg-light text-dark border ms-1 fs-6">v@def.Version</span>
+                @Html.Raw(StatusBadge(def.Status))
+            </h1>
+            <p class="text-muted mb-0 font-monospace small">@def.Key</p>
+        </div>
+        @if (!def.IsEditable)
+        {
+            <span class="badge bg-light text-secondary border px-3 py-2">Read only — create a new version to edit</span>
+        }
+    </div>
+
+    @* ── Trigger Configuration ── *@
+    <div class="card shadow-sm mb-4">
+        <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
+            <span>Trigger Configuration</span>
+            @Html.Raw(TriggerBadge(def.Trigger.Type))
+        </div>
+        <div class="card-body">
+            <form method="post" asp-page-handler="SaveTrigger">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="id" value="@def.Id" />
+
+                @switch (def.Trigger.Type)
+                {
+                    case "Webhook":
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Route Key</label>
+                            <input name="RouteKey" type="text" class="form-control font-monospace"
+                                   value="@Model.RouteKey" required @(def.IsEditable ? "" : "disabled") />
+                            <div class="form-text">The path segment for the webhook endpoint: <code>POST /webhooks/{'{'}route-key{'}'}</code></div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">HTTP Method</label>
+                            <select name="WebhookHttpMethod" class="form-select" style="width:150px" @(def.IsEditable ? "" : "disabled")>
+                                <option value="POST" selected="@(Model.WebhookHttpMethod == "POST")">POST</option>
+                                <option value="PUT" selected="@(Model.WebhookHttpMethod == "PUT")">PUT</option>
+                            </select>
+                        </div>
+                        <hr class="my-3" />
+                        <p class="text-muted small fw-semibold mb-2">Signature Validation (optional)</p>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-4">
+                                <label class="form-label small">Header Name</label>
+                                <input name="SignatureHeaderName" type="text" class="form-control form-control-sm font-monospace"
+                                       value="@Model.SignatureHeaderName" placeholder="X-Hub-Signature-256"
+                                       @(def.IsEditable ? "" : "disabled") />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small">Secret Name</label>
+                                <input name="SignatureSecretName" type="text" class="form-control form-control-sm font-monospace"
+                                       value="@Model.SignatureSecretName" placeholder="webhook-signing-secret"
+                                       @(def.IsEditable ? "" : "disabled") />
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label small">Algorithm</label>
+                                <select name="SignatureAlgorithm" class="form-select form-select-sm" @(def.IsEditable ? "" : "disabled")>
+                                    <option value="HmacSha256" selected="@(Model.SignatureAlgorithm == "HmacSha256")">HMAC-SHA256</option>
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label small">Prefix</label>
+                                <input name="SignaturePrefix" type="text" class="form-control form-control-sm font-monospace"
+                                       value="@Model.SignaturePrefix" placeholder="sha256="
+                                       @(def.IsEditable ? "" : "disabled") />
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small">Idempotency Key Source Path</label>
+                            <input name="IdempotencyKeySourcePath" type="text" class="form-control form-control-sm font-monospace"
+                                   value="@Model.IdempotencyKeySourcePath" placeholder="$.headers.X-Request-Id"
+                                   @(def.IsEditable ? "" : "disabled") />
+                            <div class="form-text">JSON path in the webhook payload to extract idempotency key from.</div>
+                        </div>
+                        break;
+
+                    case "Manual":
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Entry Point Key</label>
+                            <input name="EntryPointKey" type="text" class="form-control font-monospace"
+                                   value="@Model.EntryPointKey" required @(def.IsEditable ? "" : "disabled") />
+                            <div class="form-text">Identifier for the manual trigger entry point (e.g. "ops-console").</div>
+                        </div>
+                        break;
+
+                    case "Api":
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Operation Key</label>
+                            <input name="OperationKey" type="text" class="form-control font-monospace"
+                                   value="@Model.OperationKey" required @(def.IsEditable ? "" : "disabled") />
+                            <div class="form-text">Identifier for the API trigger operation.</div>
+                        </div>
+                        break;
+
+                    case "Schedule":
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Schedule Mode</label>
+                            <div class="form-check">
+                                <input class="form-check-input schedule-mode-radio" type="radio" name="scheduleMode" value="interval"
+                                       id="schedModeInterval"
+                                       data-clear-field="CronExpression"
+                                       checked="@(Model.IntervalSeconds.HasValue || string.IsNullOrWhiteSpace(Model.CronExpression))" />
+                                <label class="form-check-label" for="schedModeInterval">Fixed interval</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input schedule-mode-radio" type="radio" name="scheduleMode" value="cron"
+                                       id="schedModeCron"
+                                       data-clear-field="IntervalSeconds"
+                                       checked="@(!string.IsNullOrWhiteSpace(Model.CronExpression))" />
+                                <label class="form-check-label" for="schedModeCron">Cron expression</label>
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label small">Interval (seconds)</label>
+                                <input name="IntervalSeconds" type="number" min="1"
+                                       class="form-control form-control-sm"
+                                       value="@Model.IntervalSeconds"
+                                       @(def.IsEditable ? "" : "disabled") />
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">Cron Expression</label>
+                                <input name="CronExpression" type="text"
+                                       class="form-control form-control-sm font-monospace"
+                                       value="@Model.CronExpression" placeholder="*/5 * * * *"
+                                       @(def.IsEditable ? "" : "disabled") />
+                            </div>
+                        </div>
+                        break;
+
+                    default:
+                        <p class="text-muted">Unknown trigger type: @def.Trigger.Type</p>
+                        break;
+                }
+
+                @if (def.IsEditable)
+                {
+                    <div class="mt-3">
+                        <button type="submit" class="btn btn-primary btn-sm">Save Trigger</button>
+                    </div>
+                }
+            </form>
+        </div>
+    </div>
+
+    @* ── Steps Configuration ── *@
+    @foreach (var step in def.Steps)
+    {
+        var collapseId = $"step-{step.Order}";
+        <div class="card shadow-sm mb-3">
+            <div class="card-header fw-semibold d-flex align-items-center justify-content-between"
+                 data-bs-toggle="collapse" data-bs-target="#@collapseId" role="button" style="cursor:pointer">
+                <span>
+                    <span class="text-muted me-1">#@step.Order</span>
+                    @step.Key
+                </span>
+                @Html.Raw(StepTypeBadge(step.Type))
+            </div>
+            <div id="@collapseId" class="collapse">
+                <div class="card-body">
+                    <form method="post" asp-page-handler="SaveStep">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="id" value="@def.Id" />
+                        <input type="hidden" name="EditingStepKey" value="@step.Key" />
+
+                        @switch (step.Type)
+                        {
+                            case "HttpRequest":
+                            case "SendWebhook":
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold small">URL</label>
+                                    <input name="StepUrl" type="text"
+                                           class="form-control form-control-sm font-monospace placeholder-field" data-wf-key="@def.Key" data-wf-version="@def.Version" data-step-key="@step.Key"
+                                           value="@step.Url" required @(def.IsEditable ? "" : "disabled") />
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label small">Method</label>
+                                    <select name="StepMethod" class="form-select form-select-sm" style="width:120px"
+                                            @(def.IsEditable ? "" : "disabled")>
+                                        @foreach (var m in new[] { "POST", "PUT", "GET", "DELETE", "PATCH" })
+                                        {
+                                            <option value="@m" selected="@(step.Method == m)">@m</option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label small">Headers <span class="text-muted">(one per line: Name: Value)</span></label>
+                                    <textarea name="StepHeaders" rows="3"
+                                              class="form-control form-control-sm font-monospace placeholder-field" data-wf-key="@def.Key" data-wf-version="@def.Version" data-step-key="@step.Key"
+                                              @(def.IsEditable ? "" : "disabled")>@step.Headers</textarea>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label small">Body Template</label>
+                                    <textarea name="StepBody" rows="4"
+                                              class="form-control form-control-sm font-monospace placeholder-field" data-wf-key="@def.Key" data-wf-version="@def.Version" data-step-key="@step.Key"
+                                              @(def.IsEditable ? "" : "disabled")>@step.Body</textarea>
+                                    <div class="form-text">Supports placeholders like <code>{{"{{input.customerId}}"}}</code></div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label small">Timeout (seconds)</label>
+                                    <input name="StepTimeoutSeconds" type="number" min="1"
+                                           class="form-control form-control-sm" style="width:120px"
+                                           value="@step.TimeoutSeconds"
+                                           @(def.IsEditable ? "" : "disabled") />
+                                </div>
+                                break;
+
+                            case "Transform":
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold small">Mappings <span class="text-muted fw-normal">(one per line: target = source)</span></label>
+                                    <textarea name="StepMappings" rows="4"
+                                              class="form-control form-control-sm font-monospace placeholder-field" data-wf-key="@def.Key" data-wf-version="@def.Version" data-step-key="@step.Key"
+                                              @(def.IsEditable ? "" : "disabled")>@step.Mappings</textarea>
+                                    <div class="form-text">Example: <code>customerId = {{"{{input.customerId}}"}}</code></div>
+                                </div>
+                                break;
+
+                            case "Conditional":
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold small">Source Path</label>
+                                    <input name="StepSourcePath" type="text"
+                                           class="form-control form-control-sm font-monospace placeholder-field" data-wf-key="@def.Key" data-wf-version="@def.Version" data-step-key="@step.Key"
+                                           value="@step.SourcePath"
+                                           @(def.IsEditable ? "" : "disabled") />
+                                    <div class="form-text">e.g. <code>{{"{{steps.call-api.output.statusCode}}"}}</code></div>
+                                </div>
+                                <div class="row g-3 mb-3">
+                                    <div class="col-md-4">
+                                        <label class="form-label small">Operator</label>
+                                        <select name="StepOperator" class="form-select form-select-sm"
+                                                @(def.IsEditable ? "" : "disabled")>
+                                            @foreach (var op in new[] { "Equals", "NotEquals", "Exists", "NotExists" })
+                                            {
+                                                <option value="@op" selected="@(step.Operator == op)">@op</option>
+                                            }
+                                        </select>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label small">Expected Value</label>
+                                        <input name="StepExpectedValue" type="text"
+                                               class="form-control form-control-sm"
+                                               value="@step.ExpectedValue"
+                                               @(def.IsEditable ? "" : "disabled") />
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label small">If False</label>
+                                        <select name="StepFalseOutcome" class="form-select form-select-sm"
+                                                @(def.IsEditable ? "" : "disabled")>
+                                            <option value="CompleteWorkflow" selected="@(step.FalseOutcome == "CompleteWorkflow")">Complete Workflow</option>
+                                            <option value="CancelWorkflow" selected="@(step.FalseOutcome == "CancelWorkflow")">Cancel Workflow</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                break;
+
+                            case "Delay":
+                                <div class="row g-3 mb-3">
+                                    <div class="col-md-6">
+                                        <label class="form-label fw-semibold small">Delay (seconds)</label>
+                                        <input name="StepDelaySeconds" type="number" min="1"
+                                               class="form-control form-control-sm"
+                                               value="@step.DelaySeconds"
+                                               @(def.IsEditable ? "" : "disabled") />
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label fw-semibold small">Or Target Time Expression</label>
+                                        <input name="StepTargetTimeExpression" type="text"
+                                               class="form-control form-control-sm font-monospace placeholder-field" data-wf-key="@def.Key" data-wf-version="@def.Version" data-step-key="@step.Key"
+                                               value="@step.TargetTimeExpression"
+                                               placeholder="{{"{{input.followUpAtUtc}}"}}"
+                                               @(def.IsEditable ? "" : "disabled") />
+                                    </div>
+                                </div>
+                                break;
+
+                            default:
+                                <p class="text-muted small">Configuration not available for type: @step.Type</p>
+                                break;
+                        }
+
+                        @* ── Retry Policy ── *@
+                        <hr class="my-3" />
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <p class="text-muted small fw-semibold mb-0">Retry Policy</p>
+                            @if (step.HasRetryPolicy)
+                            {
+                                <span class="badge bg-info text-dark">Custom</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-light text-muted border">Default (3 attempts, 10s fixed)</span>
+                            }
+                        </div>
+                        <div class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox"
+                                   name="StepEnableRetryPolicy" value="true"
+                                   id="retryToggle-@step.Order"
+                                   checked="@step.HasRetryPolicy"
+                                   @(def.IsEditable ? "" : "disabled") />
+                            <label class="form-check-label small" for="retryToggle-@step.Order">
+                                Enable custom retry policy for this step
+                            </label>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-3">
+                                <label class="form-label small">Max Attempts</label>
+                                <input name="StepRetryMaxAttempts" type="number" min="1"
+                                       class="form-control form-control-sm"
+                                       value="@(step.RetryMaxAttempts ?? 3)"
+                                       @(def.IsEditable ? "" : "disabled") />
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small">Initial Delay (s)</label>
+                                <input name="StepRetryInitialDelaySeconds" type="number" min="0"
+                                       class="form-control form-control-sm"
+                                       value="@(step.RetryInitialDelaySeconds ?? 10)"
+                                       @(def.IsEditable ? "" : "disabled") />
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small">Backoff</label>
+                                <select name="StepRetryBackoffStrategy" class="form-select form-select-sm"
+                                        @(def.IsEditable ? "" : "disabled")>
+                                    <option value="Fixed" selected="@(step.RetryBackoffStrategy is null or "Fixed")">Fixed</option>
+                                    <option value="Exponential" selected="@(step.RetryBackoffStrategy == "Exponential")">Exponential</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small">Max Delay (s)</label>
+                                <input name="StepRetryMaxDelaySeconds" type="number" min="1"
+                                       class="form-control form-control-sm"
+                                       value="@step.RetryMaxDelaySeconds"
+                                       placeholder="No cap"
+                                       @(def.IsEditable ? "" : "disabled") />
+                            </div>
+                        </div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox"
+                                   name="StepRetryOnTimeout" value="true"
+                                   id="retryTimeout-@step.Order"
+                                   checked="@(step.RetryOnTimeout ?? true)"
+                                   @(def.IsEditable ? "" : "disabled") />
+                            <label class="form-check-label small" for="retryTimeout-@step.Order">
+                                Retry on platform timeout
+                            </label>
+                        </div>
+
+                        @if (def.IsEditable)
+                        {
+                            <button type="submit" class="btn btn-primary btn-sm">Save Step</button>
+                        }
+                    </form>
+                </div>
+            </div>
+        </div>
+    }
+    @* ── Review & Activate ── *@
+    <div class="card shadow-sm mb-4">
+        <div class="card-header fw-semibold">Review & Activate</div>
+        <div class="card-body">
+            <dl class="row small mb-3">
+                <dt class="col-sm-3 text-muted">Name</dt>
+                <dd class="col-sm-9">@def.Name</dd>
+
+                <dt class="col-sm-3 text-muted">Key</dt>
+                <dd class="col-sm-9 font-monospace">@def.Key</dd>
+
+                <dt class="col-sm-3 text-muted">Version</dt>
+                <dd class="col-sm-9">@def.Version</dd>
+
+                <dt class="col-sm-3 text-muted">Trigger</dt>
+                <dd class="col-sm-9">@Html.Raw(TriggerBadge(def.Trigger.Type))</dd>
+
+                <dt class="col-sm-3 text-muted">Steps</dt>
+                <dd class="col-sm-9">
+                    @foreach (var step in def.Steps)
+                    {
+                        @Html.Raw(StepTypeBadge(step.Type))
+                        <span class="text-muted small me-1">@step.Key</span>
+                    }
+                </dd>
+
+                <dt class="col-sm-3 text-muted">Status</dt>
+                <dd class="col-sm-9">@Html.Raw(StatusBadge(def.Status))</dd>
+
+                @if (!string.IsNullOrWhiteSpace(def.Description))
+                {
+                    <dt class="col-sm-3 text-muted">Description</dt>
+                    <dd class="col-sm-9">@def.Description</dd>
+                }
+            </dl>
+
+            <div class="d-flex gap-2">
+                @if (def.Status is "Inactive" or "Draft")
+                {
+                    <form method="post" asp-page-handler="Activate">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="id" value="@def.Id" />
+                        <button type="submit" class="btn btn-success btn-sm">Activate</button>
+                    </form>
+                }
+                @if (def.Status == "Active")
+                {
+                    <form method="post" asp-page-handler="Deactivate">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="id" value="@def.Id" />
+                        <button type="submit" class="btn btn-outline-danger btn-sm">Deactivate</button>
+                    </form>
+                }
+                <a href="/ops/definitions" class="btn btn-outline-secondary btn-sm">Back to Definitions</a>
+                @if (def.Status == "Active")
+                {
+                    <a href="/ops/workflows?workflowKey=@Uri.EscapeDataString(def.Key)"
+                       class="btn btn-outline-primary btn-sm">View Instances</a>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-YvpcrYf0tY3lHB60NNkmXc4s9bIOgUxi8T/jzmK0xNnfkEbw9tGJKh7AqFHQS"
+        crossorigin="anonymous"></script>
+
+<style>
+    .ph-autocomplete {
+        position: absolute;
+        z-index: 1050;
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: .375rem;
+        max-height: 220px;
+        overflow-y: auto;
+        box-shadow: 0 .25rem .5rem rgba(0,0,0,.1);
+        font-size: .8rem;
+        font-family: monospace;
+    }
+    .ph-autocomplete .ph-item {
+        padding: .35rem .75rem;
+        cursor: pointer;
+    }
+    .ph-autocomplete .ph-item:hover, .ph-autocomplete .ph-item.active {
+        background: #e9ecef;
+    }
+    .ph-autocomplete .ph-group {
+        padding: .25rem .75rem;
+        font-weight: 600;
+        color: #6c757d;
+        font-size: .7rem;
+        text-transform: uppercase;
+        letter-spacing: .03em;
+    }
+</style>
+
+<script>
+// Schedule mode radio — clear the unused field when switching modes
+document.querySelectorAll('.schedule-mode-radio').forEach(radio => {
+    radio.addEventListener('change', () => {
+        const fieldToClear = radio.dataset.clearField;
+        if (fieldToClear) {
+            const input = document.querySelector(`[name="${fieldToClear}"]`);
+            if (input) input.value = '';
+        }
+    });
+});
+
+(function() {
+    const cache = {};
+
+    async function fetchFields(wfKey, stepKey, version) {
+        const cacheKey = `${wfKey}/${version}/${stepKey}`;
+        if (cache[cacheKey]) return cache[cacheKey];
+
+        try {
+            let url = `/workflow-definitions/${encodeURIComponent(wfKey)}/steps/${encodeURIComponent(stepKey)}/available-fields`;
+            if (version) url += `?version=${encodeURIComponent(version)}`;
+            const resp = await fetch(url);
+            if (!resp.ok) return null;
+            const data = await resp.json();
+            cache[cacheKey] = data;
+            return data;
+        } catch {
+            return null;
+        }
+    }
+
+    function collectPlaceholders(data) {
+        const items = [];
+        // Input hint
+        items.push({ group: 'Input', placeholder: '{{input.}}', note: data.inputNote });
+        // Step outputs
+        for (const sg of (data.steps || [])) {
+            for (const f of (sg.fields || [])) {
+                items.push({ group: `Step: ${sg.stepKey}`, placeholder: f.placeholder, note: f.note || '' });
+            }
+        }
+        // Secrets
+        for (const s of (data.secrets || [])) {
+            items.push({ group: 'Secrets', placeholder: s.placeholder, note: '' });
+        }
+        return items;
+    }
+
+    function createDropdown() {
+        const el = document.createElement('div');
+        el.className = 'ph-autocomplete';
+        el.style.display = 'none';
+        document.body.appendChild(el);
+        return el;
+    }
+
+    const dropdown = createDropdown();
+    let activeField = null;
+    let activeItems = [];
+    let activeIndex = -1;
+
+    function positionDropdown(field) {
+        const rect = field.getBoundingClientRect();
+        dropdown.style.left = (rect.left + window.scrollX) + 'px';
+        dropdown.style.top = (rect.bottom + window.scrollY + 2) + 'px';
+        dropdown.style.width = Math.max(rect.width, 300) + 'px';
+    }
+
+    function renderDropdown(items, filter) {
+        dropdown.innerHTML = '';
+        const lowerFilter = (filter || '').toLowerCase();
+        let lastGroup = '';
+        let count = 0;
+
+        for (const item of items) {
+            if (lowerFilter && !item.placeholder.toLowerCase().includes(lowerFilter)) continue;
+            if (item.group !== lastGroup) {
+                const groupEl = document.createElement('div');
+                groupEl.className = 'ph-group';
+                groupEl.textContent = item.group;
+                dropdown.appendChild(groupEl);
+                lastGroup = item.group;
+            }
+            const itemEl = document.createElement('div');
+            itemEl.className = 'ph-item';
+            itemEl.textContent = item.placeholder;
+            if (item.note) itemEl.title = item.note;
+            itemEl.dataset.index = count;
+            itemEl.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                insertPlaceholder(item.placeholder);
+            });
+            dropdown.appendChild(itemEl);
+            count++;
+        }
+
+        dropdown.style.display = count > 0 ? 'block' : 'none';
+        activeIndex = -1;
+    }
+
+    function insertPlaceholder(placeholder) {
+        if (!activeField) return;
+        const field = activeField;
+        const pos = field.selectionStart || 0;
+        const text = field.value;
+
+        // Find the start of the {{ before cursor
+        const before = text.substring(0, pos);
+        const braceStart = before.lastIndexOf('{{');
+        if (braceStart === -1) {
+            hideDropdown();
+            return;
+        }
+
+        field.value = text.substring(0, braceStart) + placeholder + text.substring(pos);
+        const newPos = braceStart + placeholder.length;
+        field.setSelectionRange(newPos, newPos);
+        field.focus();
+        hideDropdown();
+    }
+
+    function hideDropdown() {
+        dropdown.style.display = 'none';
+        activeField = null;
+        activeItems = [];
+    }
+
+    document.addEventListener('input', async (e) => {
+        const field = e.target;
+        if (!field.classList.contains('placeholder-field')) return;
+
+        const wfKey = field.dataset.wfKey;
+        const stepKey = field.dataset.stepKey;
+        const wfVersion = field.dataset.wfVersion;
+        if (!wfKey || !stepKey) return;
+
+        const pos = field.selectionStart || 0;
+        const textBefore = field.value.substring(0, pos);
+        const braceStart = textBefore.lastIndexOf('{{');
+
+        if (braceStart === -1 || textBefore.indexOf('}}', braceStart) !== -1) {
+            hideDropdown();
+            return;
+        }
+
+        const partial = textBefore.substring(braceStart + 2);
+
+        const data = await fetchFields(wfKey, stepKey, wfVersion);
+        if (!data) { hideDropdown(); return; }
+
+        activeField = field;
+        activeItems = collectPlaceholders(data);
+        positionDropdown(field);
+        renderDropdown(activeItems, partial);
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (dropdown.style.display === 'none') return;
+        const items = dropdown.querySelectorAll('.ph-item');
+        if (items.length === 0) return;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            activeIndex = Math.min(activeIndex + 1, items.length - 1);
+            items.forEach((it, i) => it.classList.toggle('active', i === activeIndex));
+            items[activeIndex]?.scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            activeIndex = Math.max(activeIndex - 1, 0);
+            items.forEach((it, i) => it.classList.toggle('active', i === activeIndex));
+            items[activeIndex]?.scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'Enter' && activeIndex >= 0) {
+            e.preventDefault();
+            const placeholder = items[activeIndex]?.textContent;
+            if (placeholder) insertPlaceholder(placeholder);
+        } else if (e.key === 'Escape') {
+            hideDropdown();
+        }
+    });
+
+    document.addEventListener('focusout', (e) => {
+        if (e.target.classList.contains('placeholder-field')) {
+            setTimeout(hideDropdown, 150);
+        }
+    });
+})();
+</script>
+
+@functions {
+    static string StatusBadge(string status) => status switch
+    {
+        "Active"   => "<span class=\"badge bg-success\">Active</span>",
+        "Inactive" => "<span class=\"badge bg-secondary\">Inactive</span>",
+        "Draft"    => "<span class=\"badge bg-light text-dark border\">Draft</span>",
+        "Archived" => "<span class=\"badge bg-light text-secondary border\">Archived</span>",
+        _          => $"<span class=\"badge bg-light text-dark\">{status}</span>"
+    };
+
+    static string TriggerBadge(string triggerType) => triggerType switch
+    {
+        "Webhook"  => "<span class=\"badge bg-info text-dark\">Webhook</span>",
+        "Manual"   => "<span class=\"badge bg-secondary\">Manual</span>",
+        "Api"      => "<span class=\"badge bg-primary\">API</span>",
+        "Schedule" => "<span class=\"badge bg-warning text-dark\">Schedule</span>",
+        _          => $"<span class=\"badge bg-light text-dark\">{triggerType}</span>"
+    };
+
+    static string StepTypeBadge(string stepType) => stepType switch
+    {
+        "HttpRequest"  => "<span class=\"badge bg-primary\">HTTP Request</span>",
+        "SendWebhook"  => "<span class=\"badge bg-info text-dark\">Webhook</span>",
+        "Transform"    => "<span class=\"badge bg-success\">Transform</span>",
+        "Conditional"  => "<span class=\"badge bg-warning text-dark\">Conditional</span>",
+        "Delay"        => "<span class=\"badge bg-secondary\">Delay</span>",
+        _              => $"<span class=\"badge bg-light text-dark\">{stepType}</span>"
+    };
+}

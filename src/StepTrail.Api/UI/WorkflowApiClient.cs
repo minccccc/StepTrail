@@ -88,6 +88,129 @@ public sealed class WorkflowApiClient
         }
     }
 
+    public async Task<WorkflowDefinitionDetail?> GetDefinitionAsync(Guid id, CancellationToken ct = default)
+    {
+        try
+        {
+            return await _http.GetFromJsonAsync<WorkflowDefinitionDetail>(
+                $"/workflow-definitions/{id}", ct);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    public async Task<ApiActionResult> UpdateTriggerAsync(
+        Guid definitionId,
+        UpdateTriggerRequest request,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _http.PutAsJsonAsync(
+                $"/workflow-definitions/{definitionId}/trigger", request, ct);
+
+            if (response.IsSuccessStatusCode)
+                return ApiActionResult.Ok();
+
+            var body = await response.Content.ReadAsStringAsync(ct);
+            return ApiActionResult.Fail(ExtractErrorMessage(body) ?? $"API returned {(int)response.StatusCode}.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating trigger for definition {Id}", definitionId);
+            return ApiActionResult.Fail("An unexpected error occurred.");
+        }
+    }
+
+    public async Task<ApiActionResult> UpdateStepAsync(
+        Guid definitionId,
+        string stepKey,
+        UpdateStepRequest request,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _http.PutAsJsonAsync(
+                $"/workflow-definitions/{definitionId}/steps/{Uri.EscapeDataString(stepKey)}",
+                request, ct);
+
+            if (response.IsSuccessStatusCode)
+                return ApiActionResult.Ok();
+
+            var body = await response.Content.ReadAsStringAsync(ct);
+            return ApiActionResult.Fail(ExtractErrorMessage(body) ?? $"API returned {(int)response.StatusCode}.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating step {StepKey} for definition {Id}", stepKey, definitionId);
+            return ApiActionResult.Fail("An unexpected error occurred.");
+        }
+    }
+
+    public async Task<ApiActionResult> ActivateDefinitionAsync(Guid id, CancellationToken ct = default)
+        => await PostActionAsync($"/workflow-definitions/{id}/activate", ct);
+
+    public async Task<ApiActionResult> DeactivateDefinitionAsync(Guid id, CancellationToken ct = default)
+        => await PostActionAsync($"/workflow-definitions/{id}/deactivate", ct);
+
+    public async Task<CloneDefinitionResult> CreateBlankDefinitionAsync(
+        string name,
+        string key,
+        string triggerType,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _http.PostAsJsonAsync("/workflow-definitions/blank",
+                new { name, key, triggerType }, ct);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadFromJsonAsync<CloneDefinitionResponse>(ct);
+                return CloneDefinitionResult.Ok(body!.Id);
+            }
+
+            var errorBody = await response.Content.ReadAsStringAsync(ct);
+            var message = ExtractErrorMessage(errorBody) ?? $"API returned {(int)response.StatusCode}.";
+            return CloneDefinitionResult.Fail(message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error creating blank definition");
+            return CloneDefinitionResult.Fail("An unexpected error occurred.");
+        }
+    }
+
+    public async Task<CloneDefinitionResult> CloneDefinitionAsync(
+        Guid templateId,
+        string name,
+        string key,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _http.PostAsJsonAsync("/workflow-definitions/clone",
+                new { templateId, name, key }, ct);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadFromJsonAsync<CloneDefinitionResponse>(ct);
+                return CloneDefinitionResult.Ok(body!.Id);
+            }
+
+            var errorBody = await response.Content.ReadAsStringAsync(ct);
+            var message = ExtractErrorMessage(errorBody) ?? $"API returned {(int)response.StatusCode}.";
+            return CloneDefinitionResult.Fail(message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error cloning definition from template {TemplateId}", templateId);
+            return CloneDefinitionResult.Fail("An unexpected error occurred. Check the application logs.");
+        }
+    }
+
     public async Task<CreateInstanceResult> CreateInstanceAsync(
         string workflowKey,
         string? externalKey,
@@ -192,8 +315,30 @@ public sealed class WorkflowApiClient
         try
         {
             using var doc = JsonDocument.Parse(body);
-            if (doc.RootElement.TryGetProperty("error", out var errorProp))
-                return errorProp.GetString();
+
+            var message = doc.RootElement.TryGetProperty("error", out var errorProp)
+                ? errorProp.GetString()
+                : null;
+
+            // Append detailed validation errors if present (e.g., from activation).
+            if (doc.RootElement.TryGetProperty("errors", out var errorsList) &&
+                errorsList.ValueKind == JsonValueKind.Array)
+            {
+                var details = errorsList.EnumerateArray()
+                    .Select(e => e.GetString())
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .ToList();
+
+                if (details.Count > 0)
+                {
+                    var detailText = string.Join(" ", details.Select(d => $"- {d}"));
+                    message = message is not null
+                        ? $"{message} {detailText}"
+                        : detailText;
+                }
+            }
+
+            return message;
         }
         catch { /* not JSON — fall through */ }
         return null;
@@ -219,6 +364,24 @@ public sealed class CreateInstanceResult
 
     public static CreateInstanceResult Ok(Guid id) => new() { Success = true, InstanceId = id };
     public static CreateInstanceResult Fail(string message) => new() { Success = false, ErrorMessage = message };
+}
+
+public sealed class CloneDefinitionResult
+{
+    public bool Success { get; private init; }
+    public Guid DefinitionId { get; private init; }
+    public string? ErrorMessage { get; private init; }
+
+    public static CloneDefinitionResult Ok(Guid id) => new() { Success = true, DefinitionId = id };
+    public static CloneDefinitionResult Fail(string message) => new() { Success = false, ErrorMessage = message };
+}
+
+public sealed class CloneDefinitionResponse
+{
+    public Guid Id { get; init; }
+    public string Key { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
+    public string Status { get; init; } = string.Empty;
 }
 
 // ── API response DTOs used only by the client ────────────────────────────────────

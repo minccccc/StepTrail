@@ -1,0 +1,123 @@
+@page "/ops/definitions/create"
+@model StepTrail.Api.Pages.Templates.CreateModel
+@{
+    ViewData["Title"] = "Create Workflow Definition";
+}
+
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/ops/definitions">Definitions</a></li>
+        <li class="breadcrumb-item"><a href="/ops/definitions/new">Create from Template</a></li>
+        <li class="breadcrumb-item active">Configure</li>
+    </ol>
+</nav>
+
+<div class="row justify-content-center">
+    <div class="col-lg-7">
+
+        @if (Model.LoadError is not null)
+        {
+            <div class="alert alert-warning">@Model.LoadError</div>
+        }
+        else if (Model.Template is not null)
+        {
+            @* Template summary *@
+            <div class="card shadow-sm mb-4">
+                <div class="card-header fw-semibold">Template</div>
+                <div class="card-body">
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        @Html.Raw(TriggerBadge(Model.Template.TriggerType))
+                        <span class="badge bg-light text-dark border">v@Model.Template.Version</span>
+                        <span class="badge bg-light text-muted border">@Model.Template.StepCount step(s)</span>
+                    </div>
+                    <h5 class="mb-1">@Model.Template.Name</h5>
+                    <p class="font-monospace text-muted small mb-0">@Model.Template.Key</p>
+                    @if (!string.IsNullOrWhiteSpace(Model.Template.Description))
+                    {
+                        <p class="text-muted small mt-2 mb-0">@Model.Template.Description</p>
+                    }
+
+                    @if (Model.Template.Steps.Count > 0)
+                    {
+                        <div class="d-flex align-items-center gap-1 mt-2 small text-muted border-top pt-2 flex-wrap">
+                            <span class="fw-semibold">@(Model.Template.TriggerType ?? "Trigger")</span>
+                            @foreach (var step in Model.Template.Steps)
+                            {
+                                <span>&rarr;</span>
+                                <span>@StepTypeLabel(step.Type)</span>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+
+            @* Create form *@
+            <div class="card shadow-sm">
+                <div class="card-header fw-semibold">New Definition</div>
+                <div class="card-body">
+
+                    @if (!ViewData.ModelState.IsValid)
+                    {
+                        <div class="alert alert-danger py-2 small">
+                            @foreach (var error in ViewData.ModelState.Values.SelectMany(v => v.Errors))
+                            {
+                                <div>@error.ErrorMessage</div>
+                            }
+                        </div>
+                    }
+
+                    <form method="post">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="templateId" value="@Model.TemplateId" />
+
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold" for="Name">Workflow Name</label>
+                            <input id="Name" name="Name" type="text" class="form-control"
+                                   value="@Model.Name" required autofocus />
+                            <div class="form-text">Human-readable name for this workflow definition.</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold" for="Key">Workflow Key</label>
+                            <input id="Key" name="Key" type="text" class="form-control font-monospace"
+                                   value="@Model.Key" required
+                                   pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]"
+                                   title="Lowercase letters, numbers, and hyphens. Must start and end with a letter or number." />
+                            <div class="form-text">
+                                Stable identifier used in URLs and API calls. Cannot be changed after creation.
+                            </div>
+                        </div>
+
+                        <div class="d-flex gap-2 mt-4">
+                            <button type="submit" class="btn btn-primary">Create Definition</button>
+                            <a href="/ops/definitions/new" class="btn btn-outline-secondary">Cancel</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        }
+
+    </div>
+</div>
+
+@functions {
+    static string TriggerBadge(string? triggerType) => triggerType switch
+    {
+        "Webhook"  => "<span class=\"badge bg-info text-dark\">Webhook</span>",
+        "Manual"   => "<span class=\"badge bg-secondary\">Manual</span>",
+        "Api"      => "<span class=\"badge bg-primary\">API</span>",
+        "Schedule" => "<span class=\"badge bg-warning text-dark\">Schedule</span>",
+        null       => "<span class=\"badge bg-light text-dark border\">Unknown</span>",
+        _          => $"<span class=\"badge bg-light text-dark\">{triggerType}</span>"
+    };
+
+    static string StepTypeLabel(string stepType) => stepType switch
+    {
+        "HttpRequest"  => "HTTP",
+        "SendWebhook"  => "Webhook",
+        "Transform"    => "Transform",
+        "Conditional"  => "Conditional",
+        "Delay"        => "Delay",
+        _              => stepType
+    };
+}

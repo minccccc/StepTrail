@@ -107,7 +107,7 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
             .SingleOrDefaultAsync(workflowDefinition => workflowDefinition.Id == definition.Id, cancellationToken)
             ?? throw new InvalidOperationException($"Workflow definition '{definition.Id}' was not found.");
 
-        if (record.Status != WorkflowDefinitionStatus.Draft)
+        if (record.Status is not (WorkflowDefinitionStatus.Draft or WorkflowDefinitionStatus.Inactive))
         {
             throw new InvalidOperationException(
                 $"Workflow definition '{definition.Id}' is in '{record.Status}' status and can no longer be updated in place. " +
