@@ -235,7 +235,7 @@ public sealed class WorkflowApiClient
         int descriptorVersion,
         string name,
         string key,
-        string triggerType,
+        string? triggerType = null,
         CancellationToken ct = default)
     {
         try
@@ -263,7 +263,7 @@ public sealed class WorkflowApiClient
     public async Task<CloneDefinitionResult> CreateBlankDefinitionAsync(
         string name,
         string key,
-        string triggerType,
+        string? triggerType = null,
         CancellationToken ct = default)
     {
         try

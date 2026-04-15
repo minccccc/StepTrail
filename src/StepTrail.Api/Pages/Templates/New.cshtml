@@ -34,7 +34,7 @@
             <div class="card-header fw-semibold">Create Manually</div>
             <div class="card-body">
                 <p class="text-muted small mb-3">
-                    Start with a blank workflow. Choose a trigger type and add steps from scratch.
+                    Start with a blank workflow. Configure trigger type and steps in the editor.
                 </p>
                 <form method="post" asp-page-handler="CreateBlank">
                     @Html.AntiForgeryToken()
@@ -54,18 +54,11 @@
                         <div class="form-text">Stable identifier. Cannot be changed after creation.</div>
                     </div>
 
-                    <div class="mb-3">
-                        <label class="form-label fw-semibold">Trigger Type</label>
-                        <select name="BlankTriggerType" class="form-select">
-                            @foreach (var t in NewModel.TriggerTypes)
-                            {
-                                <option value="@t" selected="@(Model.BlankTriggerType == t)">@t</option>
-                            }
-                        </select>
-                        <div class="form-text">How this workflow will be started. You can change this later in the editor.</div>
-                    </div>
+                    <p class="text-muted small mb-0">
+                        Trigger type and step configuration can be edited after creation.
+                    </p>
 
-                    <div class="d-flex gap-2 mt-4">
+                    <div class="d-flex gap-2 mt-3">
                         <button type="submit" class="btn btn-primary">Create Workflow</button>
                         <a href="/ops/definitions" class="btn btn-outline-secondary">Cancel</a>
                     </div>

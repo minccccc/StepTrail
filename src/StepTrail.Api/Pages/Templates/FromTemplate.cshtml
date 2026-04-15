@@ -51,7 +51,7 @@
                 </div>
             </div>
 
-            @* Create form *@
+            @* Create form — name and key only *@
             <div class="card shadow-sm">
                 <div class="card-header fw-semibold">New Workflow</div>
                 <div class="card-body">
@@ -86,18 +86,11 @@
                             <div class="form-text">Stable identifier. Cannot be changed after creation.</div>
                         </div>
 
-                        <div class="mb-3">
-                            <label class="form-label fw-semibold">Trigger Type</label>
-                            <select name="TriggerType" class="form-select">
-                                @foreach (var t in FromTemplateModel.TriggerTypes)
-                                {
-                                    <option value="@t" selected="@(Model.TriggerType == t)">@t</option>
-                                }
-                            </select>
-                            <div class="form-text">How this workflow will be triggered. You can configure details after creation.</div>
-                        </div>
+                        <p class="text-muted small mb-0">
+                            Trigger type and step configuration can be edited after creation.
+                        </p>
 
-                        <div class="d-flex gap-2 mt-4">
+                        <div class="d-flex gap-2 mt-3">
                             <button type="submit" class="btn btn-primary">Create Workflow</button>
                             <a href="/ops/templates" class="btn btn-outline-secondary">Cancel</a>
                         </div>

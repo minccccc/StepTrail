@@ -347,7 +347,9 @@ ops.MapPost("/workflow-definitions/from-descriptor", async (
         return Results.BadRequest(new { error = "Key is required." });
     if (!IsValidWorkflowKey(request.Key.Trim()))
         return Results.BadRequest(new { error = "Key must contain only lowercase letters, numbers, and hyphens." });
-    if (!Enum.TryParse<TriggerType>(request.TriggerType, ignoreCase: true, out var triggerType))
+    if (!Enum.TryParse<TriggerType>(
+            string.IsNullOrWhiteSpace(request.TriggerType) ? "Webhook" : request.TriggerType,
+            ignoreCase: true, out var triggerType))
         return Results.BadRequest(new { error = $"Invalid trigger type '{request.TriggerType}'." });
 
     var descriptor = registry.Find(request.DescriptorKey, request.DescriptorVersion)
@@ -422,7 +424,9 @@ ops.MapPost("/workflow-definitions/blank", async (
         return Results.BadRequest(new { error = "Key is required." });
     if (!IsValidWorkflowKey(request.Key.Trim()))
         return Results.BadRequest(new { error = "Key must contain only lowercase letters, numbers, and hyphens, and must start and end with a letter or number." });
-    if (!Enum.TryParse<TriggerType>(request.TriggerType, ignoreCase: true, out var triggerType))
+    if (!Enum.TryParse<TriggerType>(
+            string.IsNullOrWhiteSpace(request.TriggerType) ? "Webhook" : request.TriggerType,
+            ignoreCase: true, out var triggerType))
         return Results.BadRequest(new { error = $"Invalid trigger type '{request.TriggerType}'. Supported: Webhook, Manual, Schedule." });
 
     var now = DateTimeOffset.UtcNow;

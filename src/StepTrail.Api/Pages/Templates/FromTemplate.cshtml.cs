@@ -21,9 +21,6 @@ public sealed class FromTemplateModel : PageModel
 
     [BindProperty] public string Name { get; set; } = string.Empty;
     [BindProperty] public string Key { get; set; } = string.Empty;
-    [BindProperty] public string TriggerType { get; set; } = "Webhook";
-
-    public static readonly string[] TriggerTypes = ["Webhook", "Manual", "Schedule"];
 
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
     {
@@ -60,7 +57,7 @@ public sealed class FromTemplateModel : PageModel
         }
 
         var result = await _api.CreateFromDescriptorAsync(
-            DescriptorKey, DescriptorVersion, Name, Key, TriggerType, ct);
+            DescriptorKey, DescriptorVersion, Name, Key, triggerType: null, ct);
 
         if (result.Success)
             return Redirect($"/ops/definitions/edit?id={result.DefinitionId}");

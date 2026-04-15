@@ -14,9 +14,6 @@ public sealed class NewModel : PageModel
 
     [BindProperty] public string BlankName { get; set; } = string.Empty;
     [BindProperty] public string BlankKey { get; set; } = string.Empty;
-    [BindProperty] public string BlankTriggerType { get; set; } = "Webhook";
-
-    public static readonly string[] TriggerTypes = ["Webhook", "Manual", "Schedule"];
 
     public void OnGet() { }
 
@@ -30,7 +27,7 @@ public sealed class NewModel : PageModel
         if (!ModelState.IsValid)
             return Page();
 
-        var result = await _api.CreateBlankDefinitionAsync(BlankName, BlankKey, BlankTriggerType, ct);
+        var result = await _api.CreateBlankDefinitionAsync(BlankName, BlankKey, triggerType: null, ct);
 
         if (result.Success)
             return Redirect($"/ops/definitions/edit?id={result.DefinitionId}");
