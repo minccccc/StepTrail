@@ -31,8 +31,6 @@ Key settings:
 | `UI:ApiBaseUrl` | `http://localhost:5000` | Base URL used by `WorkflowApiClient` loopback calls |
 | `Ops:Username` | `admin` | Ops console username |
 | `Ops:Password` | `admin` | Ops console password |
-| `ApiTriggerAuthentication:SharedSecret` | empty | Shared secret for API-trigger auth |
-| `ApiTriggerAuthentication:AllowUnauthenticated` | false in production config | Explicit local/dev opt-out for API-trigger auth |
 
 Override credentials in non-local environments:
 
@@ -249,6 +247,5 @@ Use it to start a new workflow instance for testing from the operations console.
 - manual workflow creation currently starts from a workflow draft that must contain at least one step definition
 - workflow definition validation on activation checks for required fields but does not validate runtime reachability of HTTP endpoints
 - replay behavior is still a known area of active refinement; the current implementation remains more permissive than the intended long-term replay model
-- API-trigger auth should be configured explicitly outside local development
 - secrets are global, not tenant-scoped
 - the committed ops credentials should be overridden in any non-local environment

@@ -162,7 +162,7 @@ Important fields:
 
 - `id` (uuid PK)
 - `workflow_definition_id` (FK -> executable_workflow_definitions)
-- `type` (TriggerType: Webhook/Manual/Api/Schedule)
+- `type` (TriggerType: Webhook/Manual/Schedule)
 - `configuration` (jsonb) -- type-specific config
 
 Interpretation:

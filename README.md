@@ -23,7 +23,7 @@ Current capabilities include:
 - Structured trail view with attempt history
 - Orphan recovery via lease expiry detection
 - Recurring workflow dispatch (interval + cron)
-- Webhook-triggered and API-triggered starts
+- Webhook-triggered starts
 - HTTP activity steps with stored response output
 - Workflow secrets and placeholder resolution
 - Alert fanout (console log + optional webhook)

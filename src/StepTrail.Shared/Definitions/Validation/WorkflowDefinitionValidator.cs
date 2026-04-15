@@ -32,7 +32,6 @@ public sealed class WorkflowDefinitionValidator : IWorkflowDefinitionValidator
         var configuredCount =
             (triggerDefinition.WebhookConfiguration is null ? 0 : 1) +
             (triggerDefinition.ManualConfiguration is null ? 0 : 1) +
-            (triggerDefinition.ApiConfiguration is null ? 0 : 1) +
             (triggerDefinition.ScheduleConfiguration is null ? 0 : 1);
 
         if (configuredCount != 1)
@@ -133,26 +132,6 @@ public sealed class WorkflowDefinitionValidator : IWorkflowDefinitionValidator
                         "workflow.trigger.manual.entryPointKey.required",
                         "triggerDefinition.manualConfiguration.entryPointKey",
                         "Manual trigger entry point key must not be empty.");
-                }
-
-                break;
-
-            case TriggerType.Api:
-                if (triggerDefinition.ApiConfiguration is null)
-                {
-                    validationResult.AddError(
-                        "workflow.trigger.configuration.required",
-                        "triggerDefinition.apiConfiguration",
-                        "API trigger definitions require API configuration.");
-                    return;
-                }
-
-                if (string.IsNullOrWhiteSpace(triggerDefinition.ApiConfiguration.OperationKey))
-                {
-                    validationResult.AddError(
-                        "workflow.trigger.api.operationKey.required",
-                        "triggerDefinition.apiConfiguration.operationKey",
-                        "API trigger operation key must not be empty.");
                 }
 
                 break;

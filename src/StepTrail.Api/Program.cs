@@ -3,7 +3,6 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using StepTrail.Shared.Entities;
 using Scalar.AspNetCore;
 using StepTrail.Api.Models;
@@ -52,8 +51,6 @@ builder.Services.AddHttpClient<WorkflowApiClient>(client =>
 }).AddHttpMessageHandler<ForwardAuthCookieHandler>();
 
 builder.Services.AddStepTrailDb(builder.Configuration, migrationsAssembly: "StepTrail.Api");
-builder.Services.Configure<ApiTriggerAuthenticationOptions>(
-    builder.Configuration.GetSection(ApiTriggerAuthenticationOptions.SectionName));
 
 builder.Services.AddWorkflow<UserOnboardingWorkflow>();
 builder.Services.AddWorkflow<WebhookToHttpCallWorkflow>();
@@ -69,8 +66,6 @@ builder.Services.AddScoped<WorkflowInstanceService>(sp =>
     new WorkflowInstanceService(sp.GetRequiredService<StepTrail.Shared.Runtime.WorkflowStartService>()));
 builder.Services.AddScoped<ExecutableWorkflowTriggerResolver>();
 builder.Services.AddScoped<ManualWorkflowTriggerService>();
-builder.Services.AddScoped<ApiTriggerAuthenticationService>();
-builder.Services.AddScoped<ApiWorkflowTriggerService>();
 builder.Services.AddScoped<WebhookIdempotencyKeyExtractor>();
 builder.Services.AddScoped<WebhookInputMapper>();
 builder.Services.AddScoped<WebhookSignatureValidationService>();
@@ -83,27 +78,6 @@ var app = builder.Build();
 
 app.UseAuthentication();
 app.UseAuthorization();
-
-var apiTriggerAuthenticationOptions = app.Services
-    .GetRequiredService<IOptions<ApiTriggerAuthenticationOptions>>()
-    .Value;
-if (string.IsNullOrWhiteSpace(apiTriggerAuthenticationOptions.SharedSecret))
-{
-    if (apiTriggerAuthenticationOptions.AllowUnauthenticated)
-    {
-        app.Logger.LogWarning(
-            "API trigger authentication is explicitly disabled because {Section}:{Property} is true and no shared secret is configured. This should only be used in local development.",
-            ApiTriggerAuthenticationOptions.SectionName,
-            nameof(ApiTriggerAuthenticationOptions.AllowUnauthenticated));
-    }
-    else
-    {
-        app.Logger.LogWarning(
-            "API trigger authentication is not configured. API trigger requests will be rejected until {SharedSecretSetting} is set or {AllowUnauthenticatedSetting} is explicitly enabled.",
-            $"{ApiTriggerAuthenticationOptions.SectionName}:SharedSecret",
-            $"{ApiTriggerAuthenticationOptions.SectionName}:{nameof(ApiTriggerAuthenticationOptions.AllowUnauthenticated)}");
-    }
-}
 
 app.MapOpenApi();
 app.MapScalarApiReference();
@@ -238,90 +212,6 @@ app.MapMethods("/webhooks/{routeKey}", [HttpMethods.Get, HttpMethods.Post, HttpM
     catch (WorkflowTriggerMismatchException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
-    }
-});
-
-app.MapPost("/api-triggers/{workflowKey}", async (
-    string workflowKey,
-    int? version,
-    HttpRequest httpRequest,
-    ApiTriggerAuthenticationService authenticationService,
-    ApiWorkflowTriggerService service,
-    CancellationToken ct) =>
-{
-    if (!httpRequest.HasJsonContentType())
-        return Results.BadRequest(new { error = "API trigger requests must use a JSON content type." });
-
-    string rawBody;
-    using (var reader = new StreamReader(httpRequest.Body))
-    {
-        rawBody = await reader.ReadToEndAsync(ct);
-    }
-
-    if (string.IsNullOrWhiteSpace(rawBody))
-        return Results.BadRequest(new { error = "Request body is required." });
-
-    JsonElement payload;
-    try
-    {
-        payload = JsonSerializer.Deserialize<JsonElement>(rawBody);
-    }
-    catch (JsonException ex)
-    {
-        return Results.BadRequest(new { error = $"Request body must be valid JSON. {ex.Message}" });
-    }
-
-    var idempotencyKey = httpRequest.Headers["X-Idempotency-Key"].FirstOrDefault();
-    var externalKey    = httpRequest.Headers["X-External-Key"].FirstOrDefault();
-    var tenantId = Guid.TryParse(httpRequest.Query["tenantId"].FirstOrDefault(), out var tid)
-        ? tid
-        : TenantSeedService.DefaultTenantId;
-
-    var request = new StartApiWorkflowRequest
-    {
-        WorkflowKey    = workflowKey,
-        Version        = version,
-        TenantId       = tenantId,
-        ExternalKey    = externalKey,
-        IdempotencyKey = idempotencyKey,
-        ApiKey         = httpRequest.Headers[authenticationService.HeaderName].FirstOrDefault(),
-        Payload        = payload,
-        Headers        = CaptureRequestHeaders(httpRequest),
-        Query          = httpRequest.Query
-            .Where(q => !string.Equals(q.Key, "tenantId", StringComparison.OrdinalIgnoreCase))
-            .ToDictionary(q => q.Key, q => q.Value.ToString())
-    };
-
-    try
-    {
-        var (response, created) = await service.StartAsync(request, ct);
-        return created
-            ? Results.Accepted($"/workflow-instances/{response.Id}", response)
-            : Results.Ok(response);
-    }
-    catch (WorkflowNotFoundException ex)
-    {
-        return Results.NotFound(new { error = ex.Message });
-    }
-    catch (TenantNotFoundException ex)
-    {
-        return Results.NotFound(new { error = ex.Message });
-    }
-    catch (WorkflowDefinitionNotActiveException ex)
-    {
-        return Results.Conflict(new { error = ex.Message });
-    }
-    catch (WorkflowTriggerMismatchException ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
-    catch (ApiTriggerAuthenticationException ex)
-    {
-        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
-    }
-    catch (ApiTriggerAuthenticationConfigurationException ex)
-    {
-        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status500InternalServerError);
     }
 });
 
@@ -532,7 +422,7 @@ ops.MapPost("/workflow-definitions/blank", async (
     if (!IsValidWorkflowKey(request.Key.Trim()))
         return Results.BadRequest(new { error = "Key must contain only lowercase letters, numbers, and hyphens, and must start and end with a letter or number." });
     if (!Enum.TryParse<TriggerType>(request.TriggerType, ignoreCase: true, out var triggerType))
-        return Results.BadRequest(new { error = $"Invalid trigger type '{request.TriggerType}'. Supported: Webhook, Manual, Api, Schedule." });
+        return Results.BadRequest(new { error = $"Invalid trigger type '{request.TriggerType}'. Supported: Webhook, Manual, Schedule." });
 
     var now = DateTimeOffset.UtcNow;
 
@@ -592,7 +482,6 @@ ops.MapPost("/workflow-definitions/clone", async (
         template.TriggerDefinition.Type,
         template.TriggerDefinition.WebhookConfiguration,
         template.TriggerDefinition.ManualConfiguration,
-        template.TriggerDefinition.ApiConfiguration,
         template.TriggerDefinition.ScheduleConfiguration);
 
     var cloned = new StepTrail.Shared.Definitions.WorkflowDefinition(
@@ -721,10 +610,6 @@ ops.MapPut("/workflow-definitions/{id:guid}/trigger", async (
                 definition.TriggerDefinition.Id,
                 new ManualTriggerConfiguration(
                     request.EntryPointKey ?? definition.TriggerDefinition.ManualConfiguration!.EntryPointKey)),
-            TriggerType.Api => TriggerDefinition.CreateApi(
-                definition.TriggerDefinition.Id,
-                new ApiTriggerConfiguration(
-                    request.OperationKey ?? definition.TriggerDefinition.ApiConfiguration!.OperationKey)),
             TriggerType.Schedule => TriggerDefinition.CreateSchedule(
                 definition.TriggerDefinition.Id,
                 !string.IsNullOrWhiteSpace(request.CronExpression)
@@ -1591,7 +1476,6 @@ static TriggerDefinition CreateDefaultTrigger(TriggerType triggerType, string wo
     {
         TriggerType.Webhook => TriggerDefinition.CreateWebhook(Guid.NewGuid(), new WebhookTriggerConfiguration(workflowKey)),
         TriggerType.Manual => TriggerDefinition.CreateManual(Guid.NewGuid(), new ManualTriggerConfiguration("ops-console")),
-        TriggerType.Api => TriggerDefinition.CreateApi(Guid.NewGuid(), new ApiTriggerConfiguration(workflowKey)),
         TriggerType.Schedule => TriggerDefinition.CreateSchedule(Guid.NewGuid(), new ScheduleTriggerConfiguration(300)),
         _ => throw new InvalidOperationException($"Unsupported trigger type '{triggerType}'.")
     };

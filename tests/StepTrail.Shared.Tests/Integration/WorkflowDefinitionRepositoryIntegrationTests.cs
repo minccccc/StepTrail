@@ -179,9 +179,9 @@ public class WorkflowDefinitionRepositoryIntegrationTests
             "Customer Sync Updated",
             1,
             WorkflowDefinitionStatus.Active,
-            TriggerDefinition.CreateApi(
+            TriggerDefinition.CreateManual(
                 Guid.NewGuid(),
-                new ApiTriggerConfiguration("start-customer-sync")),
+                new ManualTriggerConfiguration("ops-console")),
             [
                 StepDefinition.CreateConditional(
                     Guid.NewGuid(),
@@ -212,8 +212,8 @@ public class WorkflowDefinitionRepositoryIntegrationTests
             Assert.NotNull(loadedDefinition);
             Assert.Equal("Customer Sync Updated", loadedDefinition!.Name);
             Assert.Equal(WorkflowDefinitionStatus.Active, loadedDefinition.Status);
-            Assert.Equal(TriggerType.Api, loadedDefinition.TriggerDefinition.Type);
-            Assert.Equal("start-customer-sync", loadedDefinition.TriggerDefinition.ApiConfiguration!.OperationKey);
+            Assert.Equal(TriggerType.Manual, loadedDefinition.TriggerDefinition.Type);
+            Assert.Equal("ops-console", loadedDefinition.TriggerDefinition.ManualConfiguration!.EntryPointKey);
             Assert.Collection(
                 loadedDefinition.StepDefinitions,
                 step =>
@@ -260,9 +260,9 @@ public class WorkflowDefinitionRepositoryIntegrationTests
             "Customer Sync Updated",
             activeDefinition.Version,
             WorkflowDefinitionStatus.Active,
-            TriggerDefinition.CreateApi(
+            TriggerDefinition.CreateManual(
                 Guid.NewGuid(),
-                new ApiTriggerConfiguration("start-customer-sync")),
+                new ManualTriggerConfiguration("ops-console")),
             [
                 StepDefinition.CreateConditional(
                     Guid.NewGuid(),
@@ -806,9 +806,9 @@ public class WorkflowDefinitionRepositoryIntegrationTests
         var draftDefinition = CreateWorkflowDefinition(
             version: 2,
             status: WorkflowDefinitionStatus.Draft,
-            triggerDefinition: TriggerDefinition.CreateApi(
+            triggerDefinition: TriggerDefinition.CreateManual(
                 Guid.NewGuid(),
-                new ApiTriggerConfiguration("start-customer-sync")),
+                new ManualTriggerConfiguration("ops-console")),
             stepDefinitions:
             [
                 StepDefinition.CreateHttpRequest(

@@ -36,9 +36,6 @@ public sealed class TriggerDetail
     // Manual
     public string? EntryPointKey { get; init; }
 
-    // Api
-    public string? OperationKey { get; init; }
-
     // Schedule
     public int? IntervalSeconds { get; init; }
     public string? CronExpression { get; init; }
@@ -125,11 +122,6 @@ public static class WorkflowDefinitionDetailMapper
             {
                 Type = trigger.Type.ToString(),
                 EntryPointKey = trigger.ManualConfiguration!.EntryPointKey
-            },
-            TriggerType.Api => new TriggerDetail
-            {
-                Type = trigger.Type.ToString(),
-                OperationKey = trigger.ApiConfiguration!.OperationKey
             },
             TriggerType.Schedule => new TriggerDetail
             {

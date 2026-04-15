@@ -76,14 +76,6 @@ Endpoint:
 
 This path starts an executable workflow definition through its Manual trigger configuration from the ops console.
 
-### Api
-
-Endpoint:
-
-- `POST /api-triggers/{workflowKey}`
-
-This path starts an executable workflow definition through its Api trigger configuration.
-
 ### Schedule
 
 Recurring workflows are triggered automatically via an interval (in seconds) or a cron expression configured on the workflow definition. The worker dispatches these on each loop iteration when the next run time is due.

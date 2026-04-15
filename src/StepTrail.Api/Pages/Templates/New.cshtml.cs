@@ -16,7 +16,7 @@ public sealed class NewModel : PageModel
     [BindProperty] public string BlankKey { get; set; } = string.Empty;
     [BindProperty] public string BlankTriggerType { get; set; } = "Webhook";
 
-    public static readonly string[] TriggerTypes = ["Webhook", "Manual", "Api", "Schedule"];
+    public static readonly string[] TriggerTypes = ["Webhook", "Manual", "Schedule"];
 
     public void OnGet() { }
 

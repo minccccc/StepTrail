@@ -80,16 +80,6 @@ Current behavior:
 - `X-External-Key` can be supplied for external correlation
 - signature validation, input mapping, and idempotency extraction are applied when configured on the webhook trigger
 
-### API Trigger Intake
-
-`POST /api-triggers/{workflowKey}`
-
-Current behavior:
-
-- request body must be valid JSON
-- `version` is optional
-- shared-secret auth can be required through `X-StepTrail-Api-Key`
-
 ## Protected Ops API
 
 > All endpoints below require the session cookie used by the operations console.
@@ -174,7 +164,6 @@ Current behavior:
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/manual-triggers/start` | Start workflow via manual trigger |
-| `POST` | `/api-triggers/{workflowKey}` | Start workflow via API trigger |
 
 ## Workflow Instance API
 
@@ -279,5 +268,4 @@ For local development, the seeded default tenant is:
 Use it when testing:
 
 - manual starts
-- API trigger starts
 - webhook starts without an explicit tenant

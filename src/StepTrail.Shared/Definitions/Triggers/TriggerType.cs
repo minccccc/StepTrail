@@ -4,6 +4,5 @@ public enum TriggerType
 {
     Webhook = 1,
     Manual = 2,
-    Api = 3,
-    Schedule = 4
+    Schedule = 3
 }

@@ -50,7 +50,7 @@
                             Open a workflow definition and configure how it starts (trigger) and what it does (steps).
                         </p>
                         <ul class="small text-muted mb-2">
-                            <li><strong>Trigger types:</strong> Webhook (receive HTTP), Manual (ops console), API (programmatic), Schedule (cron/interval)</li>
+                            <li><strong>Trigger types:</strong> Webhook (receive HTTP), Manual (ops console), Schedule (cron/interval)</li>
                             <li><strong>Step types:</strong> HTTP Request, Send Webhook, Transform, Conditional, Delay</li>
                             <li>Each step has a retry policy you can customize (attempts, backoff, timeout)</li>
                         </ul>
@@ -104,13 +104,6 @@
   -H "Content-Type: application/json" \
   -d '{ "test": true }'</pre>
                         </div>
-                        <div>
-                            <p class="small fw-semibold mb-1">API trigger:</p>
-                            <pre class="json-block mb-0" style="max-height:80px">curl -X POST http://localhost:5000/api-triggers/YOUR-WORKFLOW-KEY \
-  -H "Content-Type: application/json" \
-  -H "X-Api-Key: YOUR-SECRET" \
-  -d '{ "test": true }'</pre>
-                        </div>
                         @if (step4Done)
                         {
                             <div class="text-success small mt-2">You have @Model.InstanceCount instance(s) already.</div>
@@ -159,10 +152,6 @@
                         <tr>
                             <td class="text-muted">Webhook endpoint</td>
                             <td><code>POST /webhooks/{'{'}route-key{'}'}</code></td>
-                        </tr>
-                        <tr>
-                            <td class="text-muted">API trigger</td>
-                            <td><code>POST /api-triggers/{'{'}workflow-key{'}'}</code></td>
                         </tr>
                         <tr>
                             <td class="text-muted">Secrets management</td>

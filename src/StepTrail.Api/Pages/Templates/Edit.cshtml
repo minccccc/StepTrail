@@ -149,15 +149,6 @@ else if (def is not null)
                         </div>
                         break;
 
-                    case "Api":
-                        <div class="mb-3">
-                            <label class="form-label fw-semibold">Operation Key</label>
-                            <input name="OperationKey" type="text" class="form-control font-monospace"
-                                   value="@Model.OperationKey" required @(def.IsEditable ? "" : "disabled") />
-                            <div class="form-text">Identifier for the API trigger operation.</div>
-                        </div>
-                        break;
-
                     case "Schedule":
                         <div class="mb-3">
                             <label class="form-label fw-semibold">Schedule Mode</label>
@@ -563,13 +554,6 @@ else if (def is not null)
   -H "Content-Type: application/json" \
   -d '{ "test": true }'</pre>
                         break;
-                    case "Api":
-                        <p class="small fw-semibold mb-1">Send a test API request:</p>
-                        <pre class="json-block mb-2" style="max-height:80px">curl -X POST http://localhost:5000/api-triggers/@def.Key \
-  -H "Content-Type: application/json" \
-  -H "X-Api-Key: YOUR-SECRET" \
-  -d '{ "test": true }'</pre>
-                        break;
                     case "Schedule":
                         <p class="small text-muted">This workflow runs on a schedule. Instances will be created automatically.</p>
                         break;
@@ -816,7 +800,6 @@ document.querySelectorAll('.schedule-mode-radio').forEach(radio => {
     {
         "Webhook"  => "<span class=\"badge bg-info text-dark\">Webhook</span>",
         "Manual"   => "<span class=\"badge bg-secondary\">Manual</span>",
-        "Api"      => "<span class=\"badge bg-primary\">API</span>",
         "Schedule" => "<span class=\"badge bg-warning text-dark\">Schedule</span>",
         _          => $"<span class=\"badge bg-light text-dark\">{triggerType}</span>"
     };

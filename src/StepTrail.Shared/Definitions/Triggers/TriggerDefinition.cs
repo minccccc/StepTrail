@@ -6,7 +6,6 @@ public sealed class TriggerDefinition
     {
         WebhookConfiguration = null!;
         ManualConfiguration = null!;
-        ApiConfiguration = null!;
         ScheduleConfiguration = null!;
     }
 
@@ -15,7 +14,6 @@ public sealed class TriggerDefinition
         TriggerType type,
         WebhookTriggerConfiguration? webhookConfiguration = null,
         ManualTriggerConfiguration? manualConfiguration = null,
-        ApiTriggerConfiguration? apiConfiguration = null,
         ScheduleTriggerConfiguration? scheduleConfiguration = null)
     {
         if (id == Guid.Empty)
@@ -25,17 +23,15 @@ public sealed class TriggerDefinition
         Type = type;
         WebhookConfiguration = webhookConfiguration;
         ManualConfiguration = manualConfiguration;
-        ApiConfiguration = apiConfiguration;
         ScheduleConfiguration = scheduleConfiguration;
 
-        ValidateConfiguration(type, webhookConfiguration, manualConfiguration, apiConfiguration, scheduleConfiguration);
+        ValidateConfiguration(type, webhookConfiguration, manualConfiguration, scheduleConfiguration);
     }
 
     public Guid Id { get; private set; }
     public TriggerType Type { get; private set; }
     public WebhookTriggerConfiguration? WebhookConfiguration { get; private set; }
     public ManualTriggerConfiguration? ManualConfiguration { get; private set; }
-    public ApiTriggerConfiguration? ApiConfiguration { get; private set; }
     public ScheduleTriggerConfiguration? ScheduleConfiguration { get; private set; }
 
     public static TriggerDefinition CreateWebhook(Guid id, WebhookTriggerConfiguration configuration) =>
@@ -44,9 +40,6 @@ public sealed class TriggerDefinition
     public static TriggerDefinition CreateManual(Guid id, ManualTriggerConfiguration configuration) =>
         new(id, TriggerType.Manual, manualConfiguration: configuration);
 
-    public static TriggerDefinition CreateApi(Guid id, ApiTriggerConfiguration configuration) =>
-        new(id, TriggerType.Api, apiConfiguration: configuration);
-
     public static TriggerDefinition CreateSchedule(Guid id, ScheduleTriggerConfiguration configuration) =>
         new(id, TriggerType.Schedule, scheduleConfiguration: configuration);
 
@@ -54,13 +47,11 @@ public sealed class TriggerDefinition
         TriggerType type,
         WebhookTriggerConfiguration? webhookConfiguration,
         ManualTriggerConfiguration? manualConfiguration,
-        ApiTriggerConfiguration? apiConfiguration,
         ScheduleTriggerConfiguration? scheduleConfiguration)
     {
         var configuredCount =
             (webhookConfiguration is null ? 0 : 1) +
             (manualConfiguration is null ? 0 : 1) +
-            (apiConfiguration is null ? 0 : 1) +
             (scheduleConfiguration is null ? 0 : 1);
 
         if (configuredCount != 1)
@@ -72,7 +63,6 @@ public sealed class TriggerDefinition
         {
             TriggerType.Webhook => webhookConfiguration is not null,
             TriggerType.Manual => manualConfiguration is not null,
-            TriggerType.Api => apiConfiguration is not null,
             TriggerType.Schedule => scheduleConfiguration is not null,
             _ => false
         };

@@ -214,7 +214,6 @@ Current public endpoints include:
 
 - `GET /health`
 - `POST /webhooks/{routeKey}`
-- `POST /api-triggers/{workflowKey}`
 
 Webhook routing is based on the configured webhook route key of the active workflow definition.
 

@@ -43,7 +43,7 @@ public sealed class IndexModel : PageModel
         ["Pending", "Running", "AwaitingRetry", "Completed", "Failed", "Cancelled", "Archived"];
 
     public static readonly string[] KnownTriggerTypes =
-        ["Webhook", "Manual", "Api", "Schedule"];
+        ["Webhook", "Manual", "Schedule"];
 
     public bool HasActiveFilters =>
         !string.IsNullOrWhiteSpace(StatusFilter) ||

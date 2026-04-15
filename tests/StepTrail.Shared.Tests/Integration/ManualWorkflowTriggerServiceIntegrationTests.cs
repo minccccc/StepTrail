@@ -130,9 +130,9 @@ public class ManualWorkflowTriggerServiceIntegrationTests
 
         var tenantId = await CreateTenantAsync();
         var definition = CreateWorkflowDefinition(
-            TriggerDefinition.CreateApi(
+            TriggerDefinition.CreateWebhook(
                 Guid.NewGuid(),
-                new ApiTriggerConfiguration("start-customer-sync")),
+                new WebhookTriggerConfiguration("test-route")),
             [
                 StepDefinition.CreateHttpRequest(
                     Guid.NewGuid(),

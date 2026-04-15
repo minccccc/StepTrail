@@ -29,9 +29,6 @@ public sealed class EditModel : PageModel
     // Manual trigger fields
     [BindProperty] public string? EntryPointKey { get; set; }
 
-    // Api trigger fields
-    [BindProperty] public string? OperationKey { get; set; }
-
     // Schedule trigger fields
     [BindProperty] public int? IntervalSeconds { get; set; }
     [BindProperty] public string? CronExpression { get; set; }
@@ -54,7 +51,7 @@ public sealed class EditModel : PageModel
 
     [BindProperty] public string? NewTriggerType { get; set; }
 
-    public static readonly string[] TriggerTypes = ["Webhook", "Manual", "Api", "Schedule"];
+    public static readonly string[] TriggerTypes = ["Webhook", "Manual", "Schedule"];
 
     public async Task<IActionResult> OnPostChangeTriggerTypeAsync(CancellationToken ct)
     {
@@ -90,7 +87,6 @@ public sealed class EditModel : PageModel
             SignaturePrefix = SignaturePrefix,
             IdempotencyKeySourcePath = IdempotencyKeySourcePath,
             EntryPointKey = EntryPointKey,
-            OperationKey = OperationKey,
             IntervalSeconds = IntervalSeconds,
             CronExpression = CronExpression
         };
@@ -253,7 +249,6 @@ public sealed class EditModel : PageModel
         SignaturePrefix = t.SignaturePrefix;
         IdempotencyKeySourcePath = t.IdempotencyKeySourcePath;
         EntryPointKey = t.EntryPointKey;
-        OperationKey = t.OperationKey;
         IntervalSeconds = t.IntervalSeconds;
         CronExpression = t.CronExpression;
     }

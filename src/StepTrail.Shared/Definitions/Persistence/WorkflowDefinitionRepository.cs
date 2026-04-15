@@ -366,9 +366,6 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
             TriggerType.Manual => TriggerDefinition.CreateManual(
                 record.Id,
                 DeserializeManualTriggerConfiguration(record.Configuration)),
-            TriggerType.Api => TriggerDefinition.CreateApi(
-                record.Id,
-                DeserializeApiTriggerConfiguration(record.Configuration)),
             TriggerType.Schedule => TriggerDefinition.CreateSchedule(
                 record.Id,
                 DeserializeScheduleTriggerConfiguration(record.Configuration)),
@@ -425,7 +422,6 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
         {
             TriggerType.Webhook => JsonSerializer.Serialize(triggerDefinition.WebhookConfiguration!, JsonSerializerOptions),
             TriggerType.Manual => JsonSerializer.Serialize(triggerDefinition.ManualConfiguration!, JsonSerializerOptions),
-            TriggerType.Api => JsonSerializer.Serialize(triggerDefinition.ApiConfiguration!, JsonSerializerOptions),
             TriggerType.Schedule => JsonSerializer.Serialize(triggerDefinition.ScheduleConfiguration!, JsonSerializerOptions),
             _ => throw new InvalidOperationException($"Unsupported trigger type '{triggerDefinition.Type}'.")
         };
@@ -467,12 +463,6 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
     {
         var dto = DeserializeDto<ManualTriggerConfigurationDto>(json, "manual trigger configuration");
         return new ManualTriggerConfiguration(dto.EntryPointKey);
-    }
-
-    private static ApiTriggerConfiguration DeserializeApiTriggerConfiguration(string json)
-    {
-        var dto = DeserializeDto<ApiTriggerConfigurationDto>(json, "api trigger configuration");
-        return new ApiTriggerConfiguration(dto.OperationKey);
     }
 
     private static ScheduleTriggerConfiguration DeserializeScheduleTriggerConfiguration(string json)
@@ -615,11 +605,6 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
     private sealed class ManualTriggerConfigurationDto
     {
         public string EntryPointKey { get; set; } = string.Empty;
-    }
-
-    private sealed class ApiTriggerConfigurationDto
-    {
-        public string OperationKey { get; set; } = string.Empty;
     }
 
     private sealed class ScheduleTriggerConfigurationDto

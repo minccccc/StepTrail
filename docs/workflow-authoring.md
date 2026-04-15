@@ -39,13 +39,12 @@ Within those areas, the main authoring pages are:
 
 ## Trigger Types
 
-Each workflow definition has exactly one trigger. The four supported trigger types are:
+Each workflow definition has exactly one trigger. The three supported trigger types are:
 
 | Type | Description |
 |------|-------------|
 | **Webhook** | Receives external HTTP payloads with signature validation and input mapping. |
 | **Manual** | Triggered from the ops console. |
-| **Api** | Triggered via API call. |
 | **Schedule** | Recurring execution via a fixed interval or cron expression. |
 
 The trigger section in the editor renders a type-specific configuration form for the currently selected trigger type.
@@ -121,7 +120,7 @@ In all three cases the new definition starts in **Inactive** status.
 
 The editor at `/ops/definitions/edit?id={guid}` allows full configuration:
 
-- **Trigger**: select and configure one of the four trigger types (Webhook, Manual, Api, Schedule). Each trigger type renders a type-specific configuration form.
+- **Trigger**: select and configure one of the three trigger types (Webhook, Manual, Schedule). Each trigger type renders a type-specific configuration form.
 - **Steps**: add, remove, and reorder steps. Each step type (HttpRequest, SendWebhook, Transform, Conditional, Delay) has its own configuration form.
 - **Retry policy**: each step supports a per-step retry policy override with MaxAttempts, InitialDelaySeconds, BackoffStrategy (Fixed or Exponential), MaxDelaySeconds, and RetryOnTimeout. If no custom policy is set, the default is 3 attempts with a 10-second fixed delay.
 - **Source indicator**: the editor shows `Manual` or `From template: {key}` so you know the definition's origin. Template-derived definitions remember their source template key and version.

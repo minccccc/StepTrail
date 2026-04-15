@@ -23,7 +23,7 @@ public sealed class FromTemplateModel : PageModel
     [BindProperty] public string Key { get; set; } = string.Empty;
     [BindProperty] public string TriggerType { get; set; } = "Webhook";
 
-    public static readonly string[] TriggerTypes = ["Webhook", "Manual", "Api", "Schedule"];
+    public static readonly string[] TriggerTypes = ["Webhook", "Manual", "Schedule"];
 
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
     {
