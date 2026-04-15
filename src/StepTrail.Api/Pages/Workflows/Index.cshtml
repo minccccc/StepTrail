@@ -93,12 +93,13 @@ else
 @functions {
     static string StatusBadge(string status) => status switch
     {
-        "Pending"   => "<span class=\"badge bg-secondary\">Pending</span>",
-        "Running"   => "<span class=\"badge bg-primary\">Running</span>",
-        "Completed" => "<span class=\"badge bg-success\">Completed</span>",
-        "Failed"    => "<span class=\"badge bg-danger\">Failed</span>",
-        "Cancelled" => "<span class=\"badge bg-warning text-dark\">Cancelled</span>",
-        "Archived"  => "<span class=\"badge bg-light text-secondary border\">Archived</span>",
-        _           => $"<span class=\"badge bg-light text-dark\">{status}</span>"
+        "Pending"       => "<span class=\"badge bg-secondary\">Pending</span>",
+        "Running"       => "<span class=\"badge bg-primary\">Running</span>",
+        "AwaitingRetry" => "<span class=\"badge bg-warning text-dark\">Awaiting Retry</span>",
+        "Completed"     => "<span class=\"badge bg-success\">Completed</span>",
+        "Failed"        => "<span class=\"badge bg-danger\">Failed</span>",
+        "Cancelled"     => "<span class=\"badge bg-warning text-dark\">Cancelled</span>",
+        "Archived"      => "<span class=\"badge bg-light text-secondary border\">Archived</span>",
+        _               => $"<span class=\"badge bg-light text-dark\">{status}</span>"
     };
 }

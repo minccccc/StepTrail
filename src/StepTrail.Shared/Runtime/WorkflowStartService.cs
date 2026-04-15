@@ -159,6 +159,12 @@ public sealed class WorkflowStartService
             Id = Guid.NewGuid(),
             WorkflowInstanceId = instance.Id,
             EventType = WorkflowEventTypes.WorkflowStarted,
+            Payload = JsonSerializer.Serialize(new
+            {
+                triggerType = definition.TriggerDefinition.Type.ToString(),
+                workflowKey = definition.Key,
+                workflowVersion = definition.Version
+            }, JsonSerializerOptions),
             CreatedAt = now
         };
 
@@ -270,6 +276,11 @@ public sealed class WorkflowStartService
             Id = Guid.NewGuid(),
             WorkflowInstanceId = instance.Id,
             EventType = WorkflowEventTypes.WorkflowStarted,
+            Payload = JsonSerializer.Serialize(new
+            {
+                workflowKey = definition.Key,
+                workflowVersion = definition.Version
+            }, JsonSerializerOptions),
             CreatedAt = now
         };
 

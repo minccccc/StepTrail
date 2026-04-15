@@ -22,7 +22,7 @@ public sealed class IndexModel : PageModel
     public string? ErrorMessage { get; private set; }
 
     public static readonly string[] KnownStatuses =
-        ["Pending", "Running", "Completed", "Failed", "Cancelled", "Archived"];
+        ["Pending", "Running", "AwaitingRetry", "Completed", "Failed", "Cancelled", "Archived"];
 
     public async Task OnGetAsync(CancellationToken ct)
     {

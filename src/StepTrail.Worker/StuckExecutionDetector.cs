@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using StepTrail.Shared;
 using StepTrail.Shared.Definitions;
@@ -75,9 +76,9 @@ public sealed class StuckExecutionDetector
                             $"expired at {execution.LockExpiresAt:yyyy-MM-dd HH:mm:ss} UTC. " +
                             "Worker may have crashed.";
 
-                RetryPolicy? retryPolicy = null;
+                var retryPolicy = ResolveRetryPolicy(execution);
 
-                if (execution.WorkflowDefinitionStepId.HasValue)
+                if (retryPolicy is null && execution.WorkflowDefinitionStepId.HasValue)
                 {
                     var stepDefinition = await _db.WorkflowDefinitionSteps
                         .FindAsync([execution.WorkflowDefinitionStepId.Value], ct)
@@ -108,6 +109,27 @@ public sealed class StuckExecutionDetector
         {
             await tx.RollbackAsync(ct);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Deserializes the snapshotted retry policy from the execution row.
+    /// Returns null if no policy JSON is available (legacy steps).
+    /// </summary>
+    private static RetryPolicy? ResolveRetryPolicy(WorkflowStepExecution execution)
+    {
+        if (string.IsNullOrWhiteSpace(execution.RetryPolicyJson))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<RetryPolicy>(
+                execution.RetryPolicyJson,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 }

@@ -3,15 +3,11 @@
 @{
     ViewData["Title"] = Model.Instance is null ? "Instance Not Found" : $"Instance {Model.Id.ToString()[..8]}…";
     var inst = Model.Instance;
-    bool isFailed    = inst?.Status == "Failed";
-    bool isCompleted = inst?.Status == "Completed";
-    bool isCancelled = inst?.Status == "Cancelled";
     bool isArchived  = inst?.Status == "Archived";
-    bool isRunning   = inst?.Status == "Running";
-    bool canRetry    = isFailed;
-    bool canReplay   = isFailed || isCompleted;
-    bool canCancel   = inst is not null && !isCompleted && !isCancelled && !isArchived;
-    bool canArchive  = inst is not null && !isRunning && !isArchived;
+    bool canRetry    = inst?.CanRetry ?? false;
+    bool canReplay   = inst?.CanReplay ?? false;
+    bool canCancel   = inst?.CanCancel ?? false;
+    bool canArchive  = inst?.CanArchive ?? false;
 }
 
 <nav aria-label="breadcrumb" class="mb-3">
@@ -138,6 +134,12 @@ else if (inst is not null)
                         <pre class="json-block">@inst.Input</pre>
                     }
 
+                    @if (!string.IsNullOrWhiteSpace(inst.TriggerData))
+                    {
+                        <p class="text-muted small mb-1 fw-semibold mt-3">Trigger Data</p>
+                        <pre class="json-block">@inst.TriggerData</pre>
+                    }
+
                     @{
                         var lastOutput = inst.StepExecutions
                             .Where(s => s.Status == "Completed" && s.Output is not null)
@@ -188,7 +190,9 @@ else if (inst is not null)
                         <thead class="table-light">
                             <tr>
                                 <th>Step</th>
+                                <th>Type</th>
                                 <th>Status</th>
+                                <th>Classification</th>
                                 <th>Attempt</th>
                                 <th>Scheduled At</th>
                                 <th>Started At</th>
@@ -202,6 +206,7 @@ else if (inst is not null)
                                 var rowClass = step.Status switch
                                 {
                                     "NotStarted" => "table-light",
+                                    "Pending"   => "",
                                     "Waiting"   => "table-info",
                                     "Completed" => "table-success",
                                     "Failed"    => "table-danger",
@@ -211,7 +216,18 @@ else if (inst is not null)
                                 };
                                 <tr class="@rowClass">
                                     <td class="fw-semibold small">@step.StepKey</td>
+                                    <td class="text-muted small">@(step.StepType ?? "—")</td>
                                     <td>@Html.Raw(StepStatusBadge(step.Status))</td>
+                                    <td class="small">
+                                        @if (!string.IsNullOrWhiteSpace(step.FailureClassification))
+                                        {
+                                            @Html.Raw(ClassificationBadge(step.FailureClassification))
+                                        }
+                                        else
+                                        {
+                                            <span class="text-muted">—</span>
+                                        }
+                                    </td>
                                     <td class="text-center">@step.Attempt</td>
                                     <td class="text-muted small">@step.ScheduledAt.ToString("HH:mm:ss")</td>
                                     <td class="text-muted small">@(step.StartedAt?.ToString("HH:mm:ss") ?? "—")</td>
@@ -244,26 +260,35 @@ else if (inst is not null)
 @functions {
     static string StatusBadge(string status) => status switch
     {
-        "Pending"   => "<span class=\"badge bg-secondary\">Pending</span>",
-        "Running"   => "<span class=\"badge bg-primary\">Running</span>",
-        "Completed" => "<span class=\"badge bg-success\">Completed</span>",
-        "Failed"    => "<span class=\"badge bg-danger\">Failed</span>",
-        "Cancelled" => "<span class=\"badge bg-warning text-dark\">Cancelled</span>",
-        "Archived"  => "<span class=\"badge bg-light text-secondary border\">Archived</span>",
-        _           => $"<span class=\"badge bg-light text-dark\">{status}</span>"
+        "Pending"       => "<span class=\"badge bg-secondary\">Pending</span>",
+        "Running"       => "<span class=\"badge bg-primary\">Running</span>",
+        "AwaitingRetry" => "<span class=\"badge bg-warning text-dark\">Awaiting Retry</span>",
+        "Completed"     => "<span class=\"badge bg-success\">Completed</span>",
+        "Failed"        => "<span class=\"badge bg-danger\">Failed</span>",
+        "Cancelled"     => "<span class=\"badge bg-warning text-dark\">Cancelled</span>",
+        "Archived"      => "<span class=\"badge bg-light text-secondary border\">Archived</span>",
+        _               => $"<span class=\"badge bg-light text-dark\">{status}</span>"
     };
 
     static string StepStatusBadge(string status) => status switch
     {
         "NotStarted" => "<span class=\"badge bg-light text-dark border\">Not Started</span>",
-        "Pending"   => "<span class=\"badge bg-secondary\">Pending</span>",
-        "Waiting"   => "<span class=\"badge bg-info text-dark\">Waiting</span>",
-        "Running"   => "<span class=\"badge bg-primary\">Running</span>",
-        "Completed" => "<span class=\"badge bg-success\">Completed</span>",
-        "Failed"    => "<span class=\"badge bg-danger\">Failed</span>",
-        "Cancelled" => "<span class=\"badge bg-warning text-dark\">Cancelled</span>",
-        "Archived"  => "<span class=\"badge bg-light text-secondary border\">Archived</span>",
-        _           => $"<span class=\"badge bg-light text-dark\">{status}</span>"
+        "Pending"    => "<span class=\"badge bg-secondary\">Pending</span>",
+        "Waiting"    => "<span class=\"badge bg-info text-dark\">Waiting</span>",
+        "Running"    => "<span class=\"badge bg-primary\">Running</span>",
+        "Completed"  => "<span class=\"badge bg-success\">Completed</span>",
+        "Failed"     => "<span class=\"badge bg-danger\">Failed</span>",
+        "Cancelled"  => "<span class=\"badge bg-warning text-dark\">Cancelled</span>",
+        _            => $"<span class=\"badge bg-light text-dark\">{status}</span>"
+    };
+
+    static string ClassificationBadge(string classification) => classification switch
+    {
+        "TransientFailure"      => "<span class=\"badge bg-warning text-dark\">Transient</span>",
+        "PermanentFailure"      => "<span class=\"badge bg-danger\">Permanent</span>",
+        "InvalidConfiguration"  => "<span class=\"badge bg-dark\">Invalid Config</span>",
+        "InputResolutionFailure"=> "<span class=\"badge bg-dark\">Input Resolution</span>",
+        _                       => $"<span class=\"badge bg-light text-dark\">{classification}</span>"
     };
 
     static string TruncateError(string error, int max) =>

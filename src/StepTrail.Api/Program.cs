@@ -473,6 +473,9 @@ ops.MapGet("/workflow-instances", async (
     bool? includeArchived,
     int? page,
     int? pageSize,
+    DateTimeOffset? createdFrom,
+    DateTimeOffset? createdTo,
+    string? triggerType,
     WorkflowQueryService service,
     CancellationToken ct) =>
 {
@@ -483,7 +486,8 @@ ops.MapGet("/workflow-instances", async (
         var result = await service.ListAsync(
             tenantId, workflowKey, status,
             includeArchived ?? false,
-            effectivePage, effectivePageSize, ct);
+            effectivePage, effectivePageSize, ct,
+            createdFrom, createdTo, triggerType);
         return Results.Ok(result);
     }
     catch (ArgumentException ex)
@@ -500,6 +504,22 @@ ops.MapGet("/workflow-instances/{id:guid}", async (
     try
     {
         var result = await service.GetDetailAsync(id, ct);
+        return Results.Ok(result);
+    }
+    catch (WorkflowInstanceNotFoundException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+});
+
+ops.MapGet("/workflow-instances/{id:guid}/trail", async (
+    Guid id,
+    WorkflowQueryService service,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var result = await service.GetTrailAsync(id, ct);
         return Results.Ok(result);
     }
     catch (WorkflowInstanceNotFoundException ex)

@@ -7,6 +7,8 @@ public sealed class WorkflowInstanceSummary
     public string WorkflowKey { get; init; } = string.Empty;
     public int WorkflowVersion { get; init; }
     public string Status { get; init; } = string.Empty;
+    /// <summary>How this workflow was triggered (Webhook, Manual, Api, Schedule), if known.</summary>
+    public string? TriggerType { get; init; }
     public string? ExternalKey { get; init; }
     public string? IdempotencyKey { get; init; }
     public DateTimeOffset CreatedAt { get; init; }
