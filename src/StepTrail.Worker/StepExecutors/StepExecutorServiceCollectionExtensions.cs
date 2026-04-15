@@ -12,10 +12,6 @@ public static class StepExecutorServiceCollectionExtensions
         services.AddSingleton<IStepExecutorRegistry, StepExecutorRegistry>();
         services.AddSingleton<IHttpResponseClassifier, HttpResponseClassifier>();
 
-        // Legacy handler-name registrations still support Group 1/legacy workflows.
-        services.AddKeyedScoped<IStepExecutor, SendWelcomeEmailHandler>(nameof(SendWelcomeEmailHandler));
-        services.AddKeyedScoped<IStepExecutor, ProvisionAccountHandler>(nameof(ProvisionAccountHandler));
-        services.AddKeyedScoped<IStepExecutor, NotifyTeamHandler>(nameof(NotifyTeamHandler));
         services.AddKeyedScoped<IStepExecutor, HttpActivityHandler>(StepExecutorKeys.HttpRequest);
         services.AddKeyedScoped<IStepExecutor, SendWebhookStepExecutor>(StepExecutorKeys.SendWebhook);
         services.AddKeyedScoped<IStepExecutor, TransformStepExecutor>(StepExecutorKeys.Transform);

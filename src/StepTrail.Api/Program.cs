@@ -52,8 +52,9 @@ builder.Services.AddHttpClient<WorkflowApiClient>(client =>
 
 builder.Services.AddStepTrailDb(builder.Configuration, migrationsAssembly: "StepTrail.Api");
 
-builder.Services.AddWorkflow<UserOnboardingWorkflow>();
-builder.Services.AddWorkflow<WebhookToHttpCallWorkflow>();
+builder.Services.AddWorkflow<WebhookTransformForwardWorkflow>();
+builder.Services.AddWorkflow<WebhookMultiStepApiChainWorkflow>();
+builder.Services.AddWorkflow<ScheduledHttpCheckAlertWorkflow>();
 builder.Services.AddWorkflowRegistry();
 
 builder.Services.AddHostedService<TenantSeedService>();
@@ -1500,7 +1501,7 @@ static StepDefinition CreateDefaultStepDefinition(string stepKey, int order, str
         };
     }
 
-    // Unrecognized type (e.g. code-first handler name like "SendWelcomeEmailHandler") — default to HttpRequest.
-    return StepDefinition.CreateHttpRequest(Guid.NewGuid(), stepKey, order,
-        new HttpRequestStepConfiguration("https://api.example.com/endpoint"));
+    throw new ArgumentException(
+        $"Unsupported step type '{stepType}'. Supported: HttpRequest, SendWebhook, Transform, Conditional, Delay.",
+        nameof(stepType));
 }
