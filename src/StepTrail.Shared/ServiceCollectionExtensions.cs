@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using StepTrail.Shared.Definitions;
+using StepTrail.Shared.Runtime;
 using StepTrail.Shared.Workflows;
 
 namespace StepTrail.Shared;
@@ -42,6 +43,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWorkflowDefinitionValidator, WorkflowDefinitionValidator>();
         services.AddScoped<IWorkflowDefinitionActivationGuard, WorkflowDefinitionActivationGuard>();
         services.AddScoped<IWorkflowDefinitionRepository, WorkflowDefinitionRepository>();
+        services.AddScoped<WorkflowStartService>();
 
         return services;
     }

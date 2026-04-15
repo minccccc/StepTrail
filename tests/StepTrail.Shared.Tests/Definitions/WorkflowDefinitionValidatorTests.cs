@@ -156,6 +156,113 @@ public class WorkflowDefinitionValidatorTests
         Assert.Equal("stepDefinitions[0].httpRequestConfiguration.url", error.Path);
     }
 
+    [Fact]
+    public void ValidateForActivation_ReturnsError_WhenWebhookSignatureValidationConfigurationIsInvalid()
+    {
+        var triggerDefinition = TriggerDefinition.CreateWebhook(
+            Guid.NewGuid(),
+            new WebhookTriggerConfiguration(
+                "partner-events",
+                "POST",
+                new WebhookSignatureValidationConfiguration(
+                    "X-StepTrail-Signature",
+                    "partner-signing-secret",
+                    WebhookSignatureAlgorithm.HmacSha256)));
+        var definition = CreateWorkflowDefinition(triggerDefinition: triggerDefinition);
+
+        SetProperty(
+            triggerDefinition.WebhookConfiguration!.SignatureValidation!,
+            nameof(WebhookSignatureValidationConfiguration.HeaderName),
+            " ");
+
+        var validationResult = _validator.ValidateForActivation(definition);
+
+        Assert.False(validationResult.IsValid);
+        var error = Assert.Single(
+            validationResult.Errors,
+            e => e.Code == "workflow.trigger.webhook.signature.headerName.required");
+        Assert.Equal("triggerDefinition.webhookConfiguration.signatureValidation.headerName", error.Path);
+    }
+
+    [Fact]
+    public void ValidateForActivation_ReturnsError_WhenWebhookInputMappingHasInvalidSourceRoot()
+    {
+        var triggerDefinition = TriggerDefinition.CreateWebhook(
+            Guid.NewGuid(),
+            new WebhookTriggerConfiguration(
+                "partner-events",
+                "POST",
+                inputMappings:
+                [
+                    new WebhookInputMapping("eventId", "body.eventId")
+                ]));
+        var definition = CreateWorkflowDefinition(triggerDefinition: triggerDefinition);
+
+        SetProperty(
+            triggerDefinition.WebhookConfiguration!.InputMappings[0],
+            nameof(WebhookInputMapping.SourcePath),
+            "payload.eventId");
+
+        var validationResult = _validator.ValidateForActivation(definition);
+
+        Assert.False(validationResult.IsValid);
+        var error = Assert.Single(
+            validationResult.Errors,
+            e => e.Code == "workflow.trigger.webhook.inputMapping.sourcePath.root.invalid");
+        Assert.Equal("triggerDefinition.webhookConfiguration.inputMappings[0].sourcePath", error.Path);
+    }
+
+    [Fact]
+    public void ValidateForActivation_ReturnsError_WhenWebhookIdempotencySourceRootIsInvalid()
+    {
+        var triggerDefinition = TriggerDefinition.CreateWebhook(
+            Guid.NewGuid(),
+            new WebhookTriggerConfiguration(
+                "partner-events",
+                "POST",
+                idempotencyKeyExtraction: new WebhookIdempotencyKeyExtractionConfiguration("headers.x-delivery-id")));
+        var definition = CreateWorkflowDefinition(triggerDefinition: triggerDefinition);
+
+        SetProperty(
+            triggerDefinition.WebhookConfiguration!.IdempotencyKeyExtraction!,
+            nameof(WebhookIdempotencyKeyExtractionConfiguration.SourcePath),
+            "query.delivery");
+
+        var validationResult = _validator.ValidateForActivation(definition);
+
+        Assert.False(validationResult.IsValid);
+        var error = Assert.Single(
+            validationResult.Errors,
+            e => e.Code == "workflow.trigger.webhook.idempotency.sourcePath.root.invalid");
+        Assert.Equal("triggerDefinition.webhookConfiguration.idempotencyKeyExtraction.sourcePath", error.Path);
+    }
+
+    [Fact]
+    public void ValidateForActivation_ReturnsError_WhenScheduleCronExpressionIsInvalid()
+    {
+        var triggerDefinition = TriggerDefinition.CreateSchedule(
+            Guid.NewGuid(),
+            new ScheduleTriggerConfiguration("0 8 * * *"));
+        var definition = CreateWorkflowDefinition(triggerDefinition: triggerDefinition);
+
+        SetProperty(
+            triggerDefinition.ScheduleConfiguration!,
+            nameof(ScheduleTriggerConfiguration.CronExpression),
+            "0 8 1 * 1");
+        SetProperty(
+            triggerDefinition.ScheduleConfiguration!,
+            nameof(ScheduleTriggerConfiguration.IntervalSeconds),
+            null);
+
+        var validationResult = _validator.ValidateForActivation(definition);
+
+        Assert.False(validationResult.IsValid);
+        var error = Assert.Single(
+            validationResult.Errors,
+            e => e.Code == "workflow.trigger.schedule.cron.invalid");
+        Assert.Equal("triggerDefinition.scheduleConfiguration.cronExpression", error.Path);
+    }
+
     private static WorkflowDefinition CreateWorkflowDefinition(
         IReadOnlyList<StepDefinition>? stepDefinitions = null,
         TriggerDefinition? triggerDefinition = null)

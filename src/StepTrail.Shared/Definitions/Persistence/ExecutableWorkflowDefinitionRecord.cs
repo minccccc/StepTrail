@@ -4,6 +4,7 @@ public class ExecutableWorkflowDefinitionRecord
 {
     public Guid Id { get; set; }
     public string Key { get; set; } = string.Empty;
+    public string? WebhookRouteKey { get; set; }
     public string Name { get; set; } = string.Empty;
     public int Version { get; set; }
     public WorkflowDefinitionStatus Status { get; set; }

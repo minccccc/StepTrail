@@ -1,17 +1,24 @@
 namespace StepTrail.Shared.Entities;
 
 /// <summary>
-/// Defines an interval-based recurring trigger for a workflow definition.
-/// The scheduler creates a new WorkflowInstance every IntervalSeconds seconds.
+/// Defines a recurring trigger for a workflow definition.
+/// The scheduler creates a new WorkflowInstance on either an interval or cron expression.
 /// </summary>
 public class RecurringWorkflowSchedule
 {
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The workflow definition to instantiate on each firing.
+    /// The legacy code-first workflow definition to instantiate on each firing.
+    /// Null for executable definition schedules.
     /// </summary>
-    public Guid WorkflowDefinitionId { get; set; }
+    public Guid? WorkflowDefinitionId { get; set; }
+
+    /// <summary>
+    /// The executable workflow key to instantiate on each firing.
+    /// Null for legacy code-first schedules.
+    /// </summary>
+    public string? ExecutableWorkflowKey { get; set; }
 
     /// <summary>
     /// Tenant under which new instances are created.
@@ -20,8 +27,15 @@ public class RecurringWorkflowSchedule
 
     /// <summary>
     /// How often to fire, in seconds.
+    /// Null when this schedule uses a cron expression.
     /// </summary>
-    public int IntervalSeconds { get; set; }
+    public int? IntervalSeconds { get; set; }
+
+    /// <summary>
+    /// Cron expression used for firing when this schedule is cron-based.
+    /// Null when this schedule uses a fixed interval.
+    /// </summary>
+    public string? CronExpression { get; set; }
 
     /// <summary>
     /// When false the schedule is skipped during dispatching.
@@ -46,6 +60,6 @@ public class RecurringWorkflowSchedule
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 
-    public WorkflowDefinition WorkflowDefinition { get; set; } = null!;
+    public WorkflowDefinition? WorkflowDefinition { get; set; }
     public Tenant Tenant { get; set; } = null!;
 }

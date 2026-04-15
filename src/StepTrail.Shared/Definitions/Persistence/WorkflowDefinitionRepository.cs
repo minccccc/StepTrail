@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using StepTrail.Shared.Entities;
 using StepTrail.Shared.Definitions.Persistence;
+using StepTrail.Shared.Runtime.Scheduling;
 
 namespace StepTrail.Shared.Definitions;
 
@@ -74,6 +76,25 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
         return record is null ? null : MapToDomain(record);
     }
 
+    public async Task<WorkflowDefinition?> GetActiveWebhookByRouteKeyAsync(
+        string routeKey,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(routeKey))
+            throw new ArgumentException("Webhook route key must not be empty.", nameof(routeKey));
+
+        var normalizedRouteKey = routeKey.Trim();
+
+        var record = await LoadDefinitionRecordQuery()
+            .SingleOrDefaultAsync(
+                definition =>
+                    definition.Status == WorkflowDefinitionStatus.Active &&
+                    definition.WebhookRouteKey == normalizedRouteKey,
+                cancellationToken);
+
+        return record is null ? null : MapToDomain(record);
+    }
+
     public async Task<WorkflowDefinition> UpdateAsync(
         WorkflowDefinition definition,
         CancellationToken cancellationToken = default)
@@ -114,6 +135,7 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
             await DeactivateOtherActiveVersionsAsync(definition.Key, definition.Id, definition.UpdatedAtUtc, cancellationToken);
 
         record.Key = definition.Key;
+        record.WebhookRouteKey = GetWebhookRouteKey(definition.TriggerDefinition);
         record.Name = definition.Name;
         record.Version = definition.Version;
         record.Status = definition.Status;
@@ -137,6 +159,9 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
             .Select(stepDefinition => MapToRecord(record.Id, stepDefinition))
             .ToList();
 
+        if (definition.Status == WorkflowDefinitionStatus.Active)
+            await SyncExecutableRecurringScheduleAsync(definition, cancellationToken);
+
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
@@ -159,6 +184,10 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
             await DeactivateOtherActiveVersionsAsync(definition.Key, definition.Id, definition.UpdatedAtUtc, cancellationToken);
 
         _db.ExecutableWorkflowDefinitions.Add(MapToRecord(definition));
+
+        if (definition.Status == WorkflowDefinitionStatus.Active)
+            await SyncExecutableRecurringScheduleAsync(definition, cancellationToken);
+
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
@@ -188,11 +217,85 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
                     .SetProperty(definition => definition.UpdatedAtUtc, updatedAtUtc),
                 cancellationToken);
 
+    private async Task SyncExecutableRecurringScheduleAsync(
+        WorkflowDefinition definition,
+        CancellationToken cancellationToken)
+    {
+        var existingSchedule = await _db.RecurringWorkflowSchedules
+            .SingleOrDefaultAsync(
+                schedule => schedule.ExecutableWorkflowKey == definition.Key,
+                cancellationToken);
+        var now = definition.UpdatedAtUtc;
+
+        if (definition.TriggerDefinition.Type != TriggerType.Schedule)
+        {
+            if (existingSchedule is not null)
+            {
+                existingSchedule.IsEnabled = false;
+                existingSchedule.UpdatedAt = now;
+            }
+
+            return;
+        }
+
+        var scheduleConfiguration = definition.TriggerDefinition.ScheduleConfiguration
+            ?? throw new InvalidOperationException(
+                $"Workflow definition '{definition.Key}' is missing schedule trigger configuration.");
+        var defaultTenantExists = await _db.Tenants
+            .AnyAsync(tenant => tenant.Id == StepTrailRuntimeDefaults.DefaultTenantId, cancellationToken);
+
+        if (!defaultTenantExists)
+        {
+            throw new InvalidOperationException(
+                $"Default tenant '{StepTrailRuntimeDefaults.DefaultTenantId}' must exist before activating scheduled workflow definitions.");
+        }
+
+        if (existingSchedule is null)
+        {
+            _db.RecurringWorkflowSchedules.Add(new RecurringWorkflowSchedule
+            {
+                Id = Guid.NewGuid(),
+                ExecutableWorkflowKey = definition.Key,
+                TenantId = StepTrailRuntimeDefaults.DefaultTenantId,
+                IntervalSeconds = scheduleConfiguration.IntervalSeconds,
+                CronExpression = scheduleConfiguration.CronExpression,
+                IsEnabled = true,
+                NextRunAt = ScheduleTriggerTimingCalculator.GetInitialNextRunAt(scheduleConfiguration, now),
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+
+            return;
+        }
+
+        var wasEnabled = existingSchedule.IsEnabled;
+        var timingChanged =
+            existingSchedule.IntervalSeconds != scheduleConfiguration.IntervalSeconds
+            || !string.Equals(existingSchedule.CronExpression, scheduleConfiguration.CronExpression, StringComparison.Ordinal);
+
+        existingSchedule.WorkflowDefinitionId = null;
+        existingSchedule.ExecutableWorkflowKey = definition.Key;
+        existingSchedule.TenantId = StepTrailRuntimeDefaults.DefaultTenantId;
+        existingSchedule.IntervalSeconds = scheduleConfiguration.IntervalSeconds;
+        existingSchedule.CronExpression = scheduleConfiguration.CronExpression;
+        existingSchedule.IsEnabled = true;
+        existingSchedule.UpdatedAt = now;
+
+        if (!wasEnabled || timingChanged || existingSchedule.LastRunAt is null)
+        {
+            existingSchedule.NextRunAt = ScheduleTriggerTimingCalculator.GetResynchronizedNextRunAt(
+                scheduleConfiguration,
+                existingSchedule.LastRunAt,
+                now);
+        }
+    }
+
     private static ExecutableWorkflowDefinitionRecord MapToRecord(WorkflowDefinition definition) =>
         new()
         {
             Id = definition.Id,
             Key = definition.Key,
+            WebhookRouteKey = GetWebhookRouteKey(definition.TriggerDefinition),
             Name = definition.Name,
             Version = definition.Version,
             Status = definition.Status,
@@ -225,6 +328,11 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
             RetryPolicyOverrideKey = stepDefinition.RetryPolicyOverrideKey,
             Configuration = SerializeStepConfiguration(stepDefinition)
         };
+
+    private static string? GetWebhookRouteKey(TriggerDefinition triggerDefinition) =>
+        triggerDefinition.Type == TriggerType.Webhook
+            ? triggerDefinition.WebhookConfiguration?.RouteKey
+            : null;
 
     private static WorkflowDefinition MapToDomain(ExecutableWorkflowDefinitionRecord record) =>
         new(
@@ -320,7 +428,23 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
     private static WebhookTriggerConfiguration DeserializeWebhookTriggerConfiguration(string json)
     {
         var dto = DeserializeDto<WebhookTriggerConfigurationDto>(json, "webhook trigger configuration");
-        return new WebhookTriggerConfiguration(dto.RouteKey, dto.HttpMethod ?? "POST");
+        var signatureValidation = dto.SignatureValidation is null
+            ? null
+            : new WebhookSignatureValidationConfiguration(
+                dto.SignatureValidation.HeaderName,
+                dto.SignatureValidation.SecretName,
+                dto.SignatureValidation.Algorithm,
+                dto.SignatureValidation.SignaturePrefix);
+        var idempotencyKeyExtraction = dto.IdempotencyKeyExtraction is null
+            ? null
+            : new WebhookIdempotencyKeyExtractionConfiguration(dto.IdempotencyKeyExtraction.SourcePath);
+
+        return new WebhookTriggerConfiguration(
+            dto.RouteKey,
+            dto.HttpMethod ?? "POST",
+            signatureValidation,
+            dto.InputMappings?.Select(mapping => new WebhookInputMapping(mapping.TargetPath, mapping.SourcePath)),
+            idempotencyKeyExtraction);
     }
 
     private static ManualTriggerConfiguration DeserializeManualTriggerConfiguration(string json)
@@ -338,7 +462,12 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
     private static ScheduleTriggerConfiguration DeserializeScheduleTriggerConfiguration(string json)
     {
         var dto = DeserializeDto<ScheduleTriggerConfigurationDto>(json, "schedule trigger configuration");
-        return new ScheduleTriggerConfiguration(dto.IntervalSeconds);
+        if (!string.IsNullOrWhiteSpace(dto.CronExpression))
+            return new ScheduleTriggerConfiguration(dto.CronExpression);
+        if (dto.IntervalSeconds.HasValue)
+            return new ScheduleTriggerConfiguration(dto.IntervalSeconds.Value);
+
+        throw new InvalidOperationException("Schedule trigger configuration must define intervalSeconds or cronExpression.");
     }
 
     private static HttpRequestStepConfiguration DeserializeHttpRequestStepConfiguration(string json)
@@ -384,6 +513,28 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
     {
         public string RouteKey { get; set; } = string.Empty;
         public string? HttpMethod { get; set; }
+        public WebhookSignatureValidationConfigurationDto? SignatureValidation { get; set; }
+        public List<WebhookInputMappingDto>? InputMappings { get; set; }
+        public WebhookIdempotencyKeyExtractionConfigurationDto? IdempotencyKeyExtraction { get; set; }
+    }
+
+    private sealed class WebhookSignatureValidationConfigurationDto
+    {
+        public string HeaderName { get; set; } = string.Empty;
+        public string SecretName { get; set; } = string.Empty;
+        public WebhookSignatureAlgorithm Algorithm { get; set; }
+        public string? SignaturePrefix { get; set; }
+    }
+
+    private sealed class WebhookInputMappingDto
+    {
+        public string TargetPath { get; set; } = string.Empty;
+        public string SourcePath { get; set; } = string.Empty;
+    }
+
+    private sealed class WebhookIdempotencyKeyExtractionConfigurationDto
+    {
+        public string SourcePath { get; set; } = string.Empty;
     }
 
     private sealed class ManualTriggerConfigurationDto
@@ -398,7 +549,8 @@ public sealed class WorkflowDefinitionRepository : IWorkflowDefinitionRepository
 
     private sealed class ScheduleTriggerConfigurationDto
     {
-        public int IntervalSeconds { get; set; }
+        public int? IntervalSeconds { get; set; }
+        public string? CronExpression { get; set; }
     }
 
     private sealed class HttpRequestStepConfigurationDto

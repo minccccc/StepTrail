@@ -386,6 +386,79 @@ public class WorkflowInstanceServiceIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task StartAsync_AllowsSameIdempotencyKey_ForDifferentWorkflowKeys()
+    {
+        await _fixture.ResetAsync();
+
+        var tenantId = await CreateTenantAsync();
+        var customerDefinition = CreateWorkflowDefinition(
+            version: 1,
+            status: WorkflowDefinitionStatus.Active,
+            stepDefinitions:
+            [
+                StepDefinition.CreateHttpRequest(
+                    Guid.NewGuid(),
+                    "fetch-customer",
+                    1,
+                    new HttpRequestStepConfiguration("https://api.example.com/customers"))
+            ],
+            key: "customer-sync");
+        var orderDefinition = CreateWorkflowDefinition(
+            version: 1,
+            status: WorkflowDefinitionStatus.Active,
+            stepDefinitions:
+            [
+                StepDefinition.CreateHttpRequest(
+                    Guid.NewGuid(),
+                    "fetch-order",
+                    1,
+                    new HttpRequestStepConfiguration("https://api.example.com/orders"))
+            ],
+            key: "order-sync");
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var repository = new WorkflowDefinitionRepository(dbContext);
+            await repository.SaveNewVersionAsync(customerDefinition);
+            await repository.SaveNewVersionAsync(orderDefinition);
+        }
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var repository = new WorkflowDefinitionRepository(dbContext);
+            var service = new WorkflowInstanceService(
+                dbContext,
+                new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
+                repository);
+
+            var firstResult = await service.StartAsync(
+                new StartWorkflowRequest
+                {
+                    WorkflowKey = customerDefinition.Key,
+                    TenantId = tenantId,
+                    IdempotencyKey = "external-delivery-123"
+                });
+            var secondResult = await service.StartAsync(
+                new StartWorkflowRequest
+                {
+                    WorkflowKey = orderDefinition.Key,
+                    TenantId = tenantId,
+                    IdempotencyKey = "external-delivery-123"
+                });
+
+            Assert.True(firstResult.Created);
+            Assert.True(secondResult.Created);
+            Assert.NotEqual(firstResult.Response.Id, secondResult.Response.Id);
+        }
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            Assert.Equal(2, await dbContext.WorkflowInstances.CountAsync());
+            Assert.Equal(2, await dbContext.IdempotencyRecords.CountAsync());
+        }
+    }
+
     private async Task<Guid> CreateTenantAsync()
     {
         var tenantId = Guid.NewGuid();
@@ -405,14 +478,15 @@ public class WorkflowInstanceServiceIntegrationTests
     private static ExecutableWorkflowDefinition CreateWorkflowDefinition(
         int version,
         WorkflowDefinitionStatus status,
-        IReadOnlyList<StepDefinition> stepDefinitions)
+        IReadOnlyList<StepDefinition> stepDefinitions,
+        string key = "customer-sync")
     {
         var createdAtUtc = new DateTimeOffset(2026, 4, 14, 12, 0, 0, TimeSpan.Zero);
         var updatedAtUtc = createdAtUtc.AddMinutes(version);
 
         return new ExecutableWorkflowDefinition(
             Guid.NewGuid(),
-            "customer-sync",
+            key,
             "Customer Sync",
             version,
             status,

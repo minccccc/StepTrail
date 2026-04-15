@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using StepTrail.Shared.Entities;
 using Scalar.AspNetCore;
 using StepTrail.Api.Models;
@@ -50,6 +51,8 @@ builder.Services.AddHttpClient<WorkflowApiClient>(client =>
 }).AddHttpMessageHandler<ForwardAuthCookieHandler>();
 
 builder.Services.AddStepTrailDb(builder.Configuration, migrationsAssembly: "StepTrail.Api");
+builder.Services.Configure<ApiTriggerAuthenticationOptions>(
+    builder.Configuration.GetSection(ApiTriggerAuthenticationOptions.SectionName));
 
 builder.Services.AddWorkflow<UserOnboardingWorkflow>();
 builder.Services.AddWorkflow<WebhookToHttpCallWorkflow>();
@@ -61,7 +64,16 @@ builder.Services.AddHostedService<WorkflowDefinitionSyncService>();
 if (builder.Environment.IsDevelopment())
     builder.Services.AddHostedService<DevDataSeedService>();
 
-builder.Services.AddScoped<WorkflowInstanceService>();
+builder.Services.AddScoped<WorkflowInstanceService>(sp =>
+    new WorkflowInstanceService(sp.GetRequiredService<StepTrail.Shared.Runtime.WorkflowStartService>()));
+builder.Services.AddScoped<ExecutableWorkflowTriggerResolver>();
+builder.Services.AddScoped<ManualWorkflowTriggerService>();
+builder.Services.AddScoped<ApiTriggerAuthenticationService>();
+builder.Services.AddScoped<ApiWorkflowTriggerService>();
+builder.Services.AddScoped<WebhookIdempotencyKeyExtractor>();
+builder.Services.AddScoped<WebhookInputMapper>();
+builder.Services.AddScoped<WebhookSignatureValidationService>();
+builder.Services.AddScoped<WebhookWorkflowTriggerService>();
 builder.Services.AddScoped<WorkflowRetryService>();
 builder.Services.AddScoped<WorkflowQueryService>();
 
@@ -69,6 +81,27 @@ var app = builder.Build();
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+var apiTriggerAuthenticationOptions = app.Services
+    .GetRequiredService<IOptions<ApiTriggerAuthenticationOptions>>()
+    .Value;
+if (string.IsNullOrWhiteSpace(apiTriggerAuthenticationOptions.SharedSecret))
+{
+    if (apiTriggerAuthenticationOptions.AllowUnauthenticated)
+    {
+        app.Logger.LogWarning(
+            "API trigger authentication is explicitly disabled because {Section}:{Property} is true and no shared secret is configured. This should only be used in local development.",
+            ApiTriggerAuthenticationOptions.SectionName,
+            nameof(ApiTriggerAuthenticationOptions.AllowUnauthenticated));
+    }
+    else
+    {
+        app.Logger.LogWarning(
+            "API trigger authentication is not configured. API trigger requests will be rejected until {SharedSecretSetting} is set or {AllowUnauthenticatedSetting} is explicitly enabled.",
+            $"{ApiTriggerAuthenticationOptions.SectionName}:SharedSecret",
+            $"{ApiTriggerAuthenticationOptions.SectionName}:{nameof(ApiTriggerAuthenticationOptions.AllowUnauthenticated)}");
+    }
+}
 
 app.MapOpenApi();
 app.MapScalarApiReference();
@@ -105,59 +138,163 @@ app.MapGet("/health", async (StepTrailDbContext db) =>
 });
 
 // Webhook endpoint — designed for external callers; intentionally unauthenticated.
-// Workflow key comes from the URL; the full request body is stored as workflow input.
+// Route key comes from the URL and resolves to one active webhook-triggered workflow definition.
+// The first intake version requires JSON and uses the parsed body as normalized input while also
+// preserving the raw request body in trigger_data for debugging and later validation work.
 // Idempotency and correlation keys are supplied as standard HTTP headers.
 // TenantId query param is optional; omit it to use the default tenant.
-app.MapPost("/webhooks/{workflowKey}", async (
-    string workflowKey,
+app.MapMethods("/webhooks/{routeKey}", [HttpMethods.Get, HttpMethods.Post, HttpMethods.Put, HttpMethods.Patch, HttpMethods.Delete, HttpMethods.Head, HttpMethods.Options], async (
+    string routeKey,
     HttpRequest httpRequest,
-    WorkflowInstanceService service,
+    WebhookWorkflowTriggerService service,
     CancellationToken ct) =>
 {
+    if (!httpRequest.HasJsonContentType())
+        return Results.BadRequest(new { error = "Webhook requests must use a JSON content type." });
+
+    string rawBody;
+    using (var reader = new StreamReader(httpRequest.Body))
+    {
+        rawBody = await reader.ReadToEndAsync(ct);
+    }
+
+    if (string.IsNullOrWhiteSpace(rawBody))
+        return Results.BadRequest(new { error = "Webhook request body is required." });
+
+    JsonElement payload;
+    try
+    {
+        payload = JsonSerializer.Deserialize<JsonElement>(rawBody);
+    }
+    catch (JsonException ex)
+    {
+        return Results.BadRequest(new { error = $"Webhook request body must be valid JSON. {ex.Message}" });
+    }
+
+    var externalKey    = httpRequest.Headers["X-External-Key"].FirstOrDefault();
+    var tenantId = Guid.TryParse(httpRequest.Query["tenantId"].FirstOrDefault(), out var tid)
+        ? tid
+        : TenantSeedService.DefaultTenantId;
+
+    try
+    {
+        var request = new StartWebhookWorkflowRequest
+        {
+            RouteKey = routeKey,
+            TenantId = tenantId,
+            ExternalKey = externalKey,
+            HttpMethod = httpRequest.Method,
+            RawBody = rawBody,
+            Payload = payload,
+            Headers = CaptureRequestHeaders(httpRequest),
+            Query = httpRequest.Query
+                .Where(q => !string.Equals(q.Key, "tenantId", StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(q => q.Key, q => q.Value.ToString())
+        };
+
+        var (response, created) = await service.StartAsync(request, ct);
+        return created
+            ? Results.Accepted($"/workflow-instances/{response.Id}", response)
+            : Results.Ok(response);
+    }
+    catch (WorkflowNotFoundException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+    catch (TenantNotFoundException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+    catch (WebhookTriggerPayloadInvalidException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (WebhookTriggerInputMappingException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (WebhookTriggerIdempotencyExtractionException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (WebhookTriggerMethodNotAllowedException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status405MethodNotAllowed);
+    }
+    catch (WebhookTriggerSignatureValidationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+    catch (WebhookTriggerSignatureConfigurationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status500InternalServerError);
+    }
+    catch (WorkflowDefinitionNotActiveException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (WorkflowTriggerMismatchException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api-triggers/{workflowKey}", async (
+    string workflowKey,
+    int? version,
+    HttpRequest httpRequest,
+    ApiTriggerAuthenticationService authenticationService,
+    ApiWorkflowTriggerService service,
+    CancellationToken ct) =>
+{
+    if (!httpRequest.HasJsonContentType())
+        return Results.BadRequest(new { error = "API trigger requests must use a JSON content type." });
+
+    string rawBody;
+    using (var reader = new StreamReader(httpRequest.Body))
+    {
+        rawBody = await reader.ReadToEndAsync(ct);
+    }
+
+    if (string.IsNullOrWhiteSpace(rawBody))
+        return Results.BadRequest(new { error = "Request body is required." });
+
+    JsonElement payload;
+    try
+    {
+        payload = JsonSerializer.Deserialize<JsonElement>(rawBody);
+    }
+    catch (JsonException ex)
+    {
+        return Results.BadRequest(new { error = $"Request body must be valid JSON. {ex.Message}" });
+    }
+
     var idempotencyKey = httpRequest.Headers["X-Idempotency-Key"].FirstOrDefault();
     var externalKey    = httpRequest.Headers["X-External-Key"].FirstOrDefault();
     var tenantId = Guid.TryParse(httpRequest.Query["tenantId"].FirstOrDefault(), out var tid)
         ? tid
         : TenantSeedService.DefaultTenantId;
 
-    // Read the raw body first so it can always be captured in trigger_data — even when
-    // JSON parsing fails. ReadFromJsonAsync consumes the stream; reading the raw string
-    // preserves the payload for debugging malformed or non-JSON requests.
-    string? rawBody = null;
-    object? input = null;
-    if (httpRequest.HasJsonContentType())
-    {
-        rawBody = await new StreamReader(httpRequest.Body).ReadToEndAsync(ct);
-        try { input = JsonSerializer.Deserialize<JsonElement>(rawBody); }
-        catch (JsonException) { /* malformed body — proceed with no input */ }
-    }
-
-    // Capture raw trigger context for debugging and placeholder resolution.
-    // Headers that carry no diagnostic value for webhooks are excluded.
-    // body: parsed JsonElement when valid JSON; raw string when malformed; null when no body.
-    var triggerData = JsonSerializer.Serialize(new
-    {
-        body    = input ?? (object?)rawBody,
-        headers = CaptureWebhookHeaders(httpRequest),
-        query   = httpRequest.Query
-            .ToDictionary(q => q.Key, q => q.Value.ToString())
-    });
-
-    var request = new StartWorkflowRequest
+    var request = new StartApiWorkflowRequest
     {
         WorkflowKey    = workflowKey,
+        Version        = version,
         TenantId       = tenantId,
         ExternalKey    = externalKey,
         IdempotencyKey = idempotencyKey,
-        Input          = input,
-        TriggerData    = triggerData
+        ApiKey         = httpRequest.Headers[authenticationService.HeaderName].FirstOrDefault(),
+        Payload        = payload,
+        Headers        = CaptureRequestHeaders(httpRequest),
+        Query          = httpRequest.Query
+            .Where(q => !string.Equals(q.Key, "tenantId", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(q => q.Key, q => q.Value.ToString())
     };
 
     try
     {
         var (response, created) = await service.StartAsync(request, ct);
         return created
-            ? Results.Created($"/workflow-instances/{response.Id}", response)
+            ? Results.Accepted($"/workflow-instances/{response.Id}", response)
             : Results.Ok(response);
     }
     catch (WorkflowNotFoundException ex)
@@ -171,6 +308,18 @@ app.MapPost("/webhooks/{workflowKey}", async (
     catch (WorkflowDefinitionNotActiveException ex)
     {
         return Results.Conflict(new { error = ex.Message });
+    }
+    catch (WorkflowTriggerMismatchException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (ApiTriggerAuthenticationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+    catch (ApiTriggerAuthenticationConfigurationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status500InternalServerError);
     }
 });
 
@@ -240,6 +389,49 @@ ops.MapGet("/workflows", (IWorkflowRegistry registry) =>
             .Select(s => new { s.Order, s.StepKey, s.StepType })
     });
     return Results.Ok(workflows);
+});
+
+ops.MapPost("/manual-triggers/start", async (
+    StartManualWorkflowRequest request,
+    ClaimsPrincipal user,
+    ManualWorkflowTriggerService service,
+    CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.WorkflowKey))
+        return Results.BadRequest(new { error = "WorkflowKey is required." });
+
+    if (request.TenantId == Guid.Empty)
+        return Results.BadRequest(new { error = "TenantId is required." });
+
+    if (string.IsNullOrWhiteSpace(request.ActorId))
+    {
+        request.ActorId = user.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? user.Identity?.Name;
+    }
+
+    try
+    {
+        var (response, created) = await service.StartAsync(request, ct);
+        return created
+            ? Results.Created($"/workflow-instances/{response.Id}", response)
+            : Results.Ok(response);
+    }
+    catch (WorkflowNotFoundException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+    catch (TenantNotFoundException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+    catch (WorkflowDefinitionNotActiveException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (WorkflowTriggerMismatchException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
 });
 
 ops.MapPost("/workflow-instances", async (
@@ -479,11 +671,13 @@ app.Run();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-static Dictionary<string, string> CaptureWebhookHeaders(HttpRequest request)
+static Dictionary<string, string> CaptureRequestHeaders(HttpRequest request)
 {
-    // These headers carry no diagnostic value for webhook trigger debugging.
+    // These headers are transport noise or likely to carry secrets and should not be
+    // persisted into trigger_data.
     var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
+        "Authorization", "Cookie", "Set-Cookie", "X-Api-Key",
         "Connection", "Content-Length", "Host", "Transfer-Encoding",
         "Accept-Encoding", "Accept-Language", "Upgrade-Insecure-Requests"
     };

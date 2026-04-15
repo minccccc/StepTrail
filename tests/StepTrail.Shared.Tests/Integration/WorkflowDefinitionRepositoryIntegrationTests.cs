@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using StepTrail.Shared;
 using StepTrail.Shared.Definitions;
 using StepTrail.Shared.Tests.Infrastructure;
 using Xunit;
@@ -25,7 +26,19 @@ public class WorkflowDefinitionRepositoryIntegrationTests
             status: WorkflowDefinitionStatus.Draft,
             triggerDefinition: TriggerDefinition.CreateWebhook(
                 Guid.NewGuid(),
-                new WebhookTriggerConfiguration("customer-created")),
+                new WebhookTriggerConfiguration(
+                    "customer-created",
+                    "POST",
+                    new WebhookSignatureValidationConfiguration(
+                        "X-StepTrail-Signature",
+                        "partner-signing-secret",
+                        WebhookSignatureAlgorithm.HmacSha256,
+                        "sha256="),
+                    [
+                        new WebhookInputMapping("eventId", "body.event_id"),
+                        new WebhookInputMapping("requestId", "headers.x-request-id")
+                    ],
+                    new WebhookIdempotencyKeyExtractionConfiguration("headers.x-delivery-id"))),
             stepDefinitions:
             [
                 StepDefinition.CreateHttpRequest(
@@ -66,6 +79,36 @@ public class WorkflowDefinitionRepositoryIntegrationTests
             Assert.Equal(WorkflowDefinitionStatus.Draft, loadedDefinition.Status);
             Assert.Equal(TriggerType.Webhook, loadedDefinition.TriggerDefinition.Type);
             Assert.Equal("customer-created", loadedDefinition.TriggerDefinition.WebhookConfiguration!.RouteKey);
+            Assert.NotNull(loadedDefinition.TriggerDefinition.WebhookConfiguration.SignatureValidation);
+            Assert.Equal(
+                "X-StepTrail-Signature",
+                loadedDefinition.TriggerDefinition.WebhookConfiguration.SignatureValidation!.HeaderName);
+            Assert.Equal(
+                "partner-signing-secret",
+                loadedDefinition.TriggerDefinition.WebhookConfiguration.SignatureValidation.SecretName);
+            Assert.Equal(
+                WebhookSignatureAlgorithm.HmacSha256,
+                loadedDefinition.TriggerDefinition.WebhookConfiguration.SignatureValidation.Algorithm);
+            Assert.Equal(
+                "sha256=",
+                loadedDefinition.TriggerDefinition.WebhookConfiguration.SignatureValidation.SignaturePrefix);
+            Assert.Equal(2, loadedDefinition.TriggerDefinition.WebhookConfiguration.InputMappings.Count);
+            Assert.Equal(
+                "eventId",
+                loadedDefinition.TriggerDefinition.WebhookConfiguration.InputMappings[0].TargetPath);
+            Assert.Equal(
+                "body.event_id",
+                loadedDefinition.TriggerDefinition.WebhookConfiguration.InputMappings[0].SourcePath);
+            Assert.Equal(
+                "requestId",
+                loadedDefinition.TriggerDefinition.WebhookConfiguration.InputMappings[1].TargetPath);
+            Assert.Equal(
+                "headers.x-request-id",
+                loadedDefinition.TriggerDefinition.WebhookConfiguration.InputMappings[1].SourcePath);
+            Assert.NotNull(loadedDefinition.TriggerDefinition.WebhookConfiguration.IdempotencyKeyExtraction);
+            Assert.Equal(
+                "headers.x-delivery-id",
+                loadedDefinition.TriggerDefinition.WebhookConfiguration.IdempotencyKeyExtraction!.SourcePath);
             Assert.Collection(
                 loadedDefinition.StepDefinitions,
                 step =>
@@ -317,6 +360,7 @@ public class WorkflowDefinitionRepositoryIntegrationTests
     public async Task SaveNewVersionAsync_AndGetActiveByKeyAsync_PersistsMultipleVersions()
     {
         await _fixture.ResetAsync();
+        await SeedDefaultTenantAsync();
 
         var draftDefinition = CreateWorkflowDefinition(
             version: 1,
@@ -378,9 +422,288 @@ public class WorkflowDefinitionRepositoryIntegrationTests
     }
 
     [Fact]
+    public async Task SaveNewVersionAsync_WhenActiveScheduleTrigger_UpsertsExecutableRecurringSchedule()
+    {
+        await _fixture.ResetAsync();
+        await SeedDefaultTenantAsync();
+
+        var activeDefinition = CreateWorkflowDefinition(
+            version: 1,
+            status: WorkflowDefinitionStatus.Active,
+            triggerDefinition: TriggerDefinition.CreateSchedule(
+                Guid.NewGuid(),
+                new ScheduleTriggerConfiguration(300)),
+            stepDefinitions:
+            [
+                StepDefinition.CreateHttpRequest(
+                    Guid.NewGuid(),
+                    "call-upstream",
+                    1,
+                    new HttpRequestStepConfiguration("https://api.example.com/sync"))
+            ]);
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var repository = new WorkflowDefinitionRepository(dbContext);
+            await repository.SaveNewVersionAsync(activeDefinition);
+        }
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var schedule = await dbContext.RecurringWorkflowSchedules.SingleAsync();
+
+            Assert.Null(schedule.WorkflowDefinitionId);
+            Assert.Equal(activeDefinition.Key, schedule.ExecutableWorkflowKey);
+            Assert.Equal(StepTrailRuntimeDefaults.DefaultTenantId, schedule.TenantId);
+            Assert.Equal(300, schedule.IntervalSeconds);
+            Assert.Null(schedule.CronExpression);
+            Assert.True(schedule.IsEnabled);
+        }
+    }
+
+    [Fact]
+    public async Task SaveNewVersionAsync_WhenActiveCronScheduleTrigger_UpsertsExecutableRecurringSchedule()
+    {
+        await _fixture.ResetAsync();
+        await SeedDefaultTenantAsync();
+
+        var activeDefinition = CreateWorkflowDefinition(
+            version: 1,
+            status: WorkflowDefinitionStatus.Active,
+            triggerDefinition: TriggerDefinition.CreateSchedule(
+                Guid.NewGuid(),
+                new ScheduleTriggerConfiguration("0 8 * * 1-5")),
+            stepDefinitions:
+            [
+                StepDefinition.CreateHttpRequest(
+                    Guid.NewGuid(),
+                    "call-upstream",
+                    1,
+                    new HttpRequestStepConfiguration("https://api.example.com/sync"))
+            ]);
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var repository = new WorkflowDefinitionRepository(dbContext);
+            await repository.SaveNewVersionAsync(activeDefinition);
+        }
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var loadedDefinition = await new WorkflowDefinitionRepository(dbContext)
+                .GetActiveByKeyAsync(activeDefinition.Key);
+            var schedule = await dbContext.RecurringWorkflowSchedules.SingleAsync();
+
+            Assert.NotNull(loadedDefinition);
+            Assert.Null(loadedDefinition!.TriggerDefinition.ScheduleConfiguration!.IntervalSeconds);
+            Assert.Equal("0 8 * * 1-5", loadedDefinition.TriggerDefinition.ScheduleConfiguration.CronExpression);
+            Assert.Null(schedule.IntervalSeconds);
+            Assert.Equal("0 8 * * 1-5", schedule.CronExpression);
+            Assert.True(schedule.NextRunAt > activeDefinition.UpdatedAtUtc);
+        }
+    }
+
+    [Fact]
+    public async Task SaveNewVersionAsync_WhenNewActiveVersionIsNotSchedule_DisablesExecutableRecurringSchedule()
+    {
+        await _fixture.ResetAsync();
+        await SeedDefaultTenantAsync();
+
+        var scheduleDefinition = CreateWorkflowDefinition(
+            version: 1,
+            status: WorkflowDefinitionStatus.Active,
+            triggerDefinition: TriggerDefinition.CreateSchedule(
+                Guid.NewGuid(),
+                new ScheduleTriggerConfiguration(300)),
+            stepDefinitions:
+            [
+                StepDefinition.CreateHttpRequest(
+                    Guid.NewGuid(),
+                    "call-upstream",
+                    1,
+                    new HttpRequestStepConfiguration("https://api.example.com/sync"))
+            ]);
+        var manualDefinition = CreateWorkflowDefinition(
+            version: 2,
+            status: WorkflowDefinitionStatus.Active,
+            triggerDefinition: TriggerDefinition.CreateManual(
+                Guid.NewGuid(),
+                new ManualTriggerConfiguration("ops-console")),
+            stepDefinitions:
+            [
+                StepDefinition.CreateHttpRequest(
+                    Guid.NewGuid(),
+                    "call-upstream",
+                    1,
+                    new HttpRequestStepConfiguration("https://api.example.com/sync"))
+            ]);
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var repository = new WorkflowDefinitionRepository(dbContext);
+            await repository.SaveNewVersionAsync(scheduleDefinition);
+            await repository.SaveNewVersionAsync(manualDefinition);
+        }
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var schedule = await dbContext.RecurringWorkflowSchedules.SingleAsync();
+
+            Assert.Equal(scheduleDefinition.Key, schedule.ExecutableWorkflowKey);
+            Assert.False(schedule.IsEnabled);
+        }
+    }
+
+    [Fact]
+    public async Task GetActiveWebhookByRouteKeyAsync_ReturnsMatchingActiveWebhookDefinition()
+    {
+        await _fixture.ResetAsync();
+
+        var webhookDefinition = CreateWorkflowDefinition(
+            version: 1,
+            status: WorkflowDefinitionStatus.Active,
+            triggerDefinition: TriggerDefinition.CreateWebhook(
+                Guid.NewGuid(),
+                new WebhookTriggerConfiguration("partner-events")),
+            stepDefinitions:
+            [
+                StepDefinition.CreateHttpRequest(
+                    Guid.NewGuid(),
+                    "forward-payload",
+                    1,
+                    new HttpRequestStepConfiguration("https://api.example.com/forward"))
+            ]);
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var repository = new WorkflowDefinitionRepository(dbContext);
+            await repository.SaveNewVersionAsync(webhookDefinition);
+        }
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var repository = new WorkflowDefinitionRepository(dbContext);
+            var loadedDefinition = await repository.GetActiveWebhookByRouteKeyAsync("partner-events");
+
+            Assert.NotNull(loadedDefinition);
+            Assert.Equal(webhookDefinition.Id, loadedDefinition!.Id);
+            Assert.Equal(TriggerType.Webhook, loadedDefinition.TriggerDefinition.Type);
+            Assert.Equal("partner-events", loadedDefinition.TriggerDefinition.WebhookConfiguration!.RouteKey);
+        }
+    }
+
+    [Fact]
+    public async Task SaveNewVersionAsync_AllowsReusingWebhookRouteKeyAcrossVersionsOfSameWorkflowKey()
+    {
+        await _fixture.ResetAsync();
+
+        var originalActiveDefinition = CreateWorkflowDefinition(
+            version: 1,
+            status: WorkflowDefinitionStatus.Active,
+            triggerDefinition: TriggerDefinition.CreateWebhook(
+                Guid.NewGuid(),
+                new WebhookTriggerConfiguration("partner-events")),
+            stepDefinitions:
+            [
+                StepDefinition.CreateHttpRequest(
+                    Guid.NewGuid(),
+                    "forward-payload",
+                    1,
+                    new HttpRequestStepConfiguration("https://api.example.com/forward"))
+            ]);
+
+        var replacementActiveDefinition = CreateWorkflowDefinition(
+            version: 2,
+            status: WorkflowDefinitionStatus.Active,
+            triggerDefinition: TriggerDefinition.CreateWebhook(
+                Guid.NewGuid(),
+                new WebhookTriggerConfiguration("partner-events")),
+            stepDefinitions:
+            [
+                StepDefinition.CreateSendWebhook(
+                    Guid.NewGuid(),
+                    "notify-partner",
+                    1,
+                    new SendWebhookStepConfiguration("https://hooks.example.com/partner-events"))
+            ]);
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var repository = new WorkflowDefinitionRepository(dbContext);
+            await repository.SaveNewVersionAsync(originalActiveDefinition);
+            await repository.SaveNewVersionAsync(replacementActiveDefinition);
+        }
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var repository = new WorkflowDefinitionRepository(dbContext);
+            var loadedOriginalDefinition = await repository.GetByIdAsync(originalActiveDefinition.Id);
+            var loadedReplacementDefinition = await repository.GetActiveWebhookByRouteKeyAsync("partner-events");
+
+            Assert.NotNull(loadedOriginalDefinition);
+            Assert.NotNull(loadedReplacementDefinition);
+            Assert.Equal(WorkflowDefinitionStatus.Inactive, loadedOriginalDefinition!.Status);
+            Assert.Equal(replacementActiveDefinition.Id, loadedReplacementDefinition!.Id);
+            Assert.Equal(2, loadedReplacementDefinition.Version);
+        }
+    }
+
+    [Fact]
+    public async Task SaveNewVersionAsync_Throws_WhenDifferentActiveWorkflowUsesSameWebhookRouteKey()
+    {
+        await _fixture.ResetAsync();
+
+        var firstDefinition = CreateWorkflowDefinition(
+            version: 1,
+            status: WorkflowDefinitionStatus.Active,
+            triggerDefinition: TriggerDefinition.CreateWebhook(
+                Guid.NewGuid(),
+                new WebhookTriggerConfiguration("partner-events")),
+            stepDefinitions:
+            [
+                StepDefinition.CreateHttpRequest(
+                    Guid.NewGuid(),
+                    "forward-payload",
+                    1,
+                    new HttpRequestStepConfiguration("https://api.example.com/forward"))
+            ],
+            key: "customer-sync");
+
+        var secondDefinition = CreateWorkflowDefinition(
+            version: 1,
+            status: WorkflowDefinitionStatus.Active,
+            triggerDefinition: TriggerDefinition.CreateWebhook(
+                Guid.NewGuid(),
+                new WebhookTriggerConfiguration("partner-events")),
+            stepDefinitions:
+            [
+                StepDefinition.CreateSendWebhook(
+                    Guid.NewGuid(),
+                    "notify-partner",
+                    1,
+                    new SendWebhookStepConfiguration("https://hooks.example.com/partner-events"))
+            ],
+            key: "order-sync");
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var repository = new WorkflowDefinitionRepository(dbContext);
+            await repository.SaveNewVersionAsync(firstDefinition);
+        }
+
+        await using (var dbContext = _fixture.CreateDbContext())
+        {
+            var repository = new WorkflowDefinitionRepository(dbContext);
+
+            await Assert.ThrowsAsync<DbUpdateException>(() => repository.SaveNewVersionAsync(secondDefinition));
+        }
+    }
+
+    [Fact]
     public async Task SaveNewVersionAsync_DeactivatesPreviouslyActiveVersion_ForSameWorkflowKey()
     {
         await _fixture.ResetAsync();
+        await SeedDefaultTenantAsync();
 
         var originalActiveDefinition = CreateWorkflowDefinition(
             version: 1,
@@ -559,14 +882,15 @@ public class WorkflowDefinitionRepositoryIntegrationTests
         int version,
         WorkflowDefinitionStatus status,
         TriggerDefinition triggerDefinition,
-        IReadOnlyList<StepDefinition> stepDefinitions)
+        IReadOnlyList<StepDefinition> stepDefinitions,
+        string key = "customer-sync")
     {
         var createdAtUtc = new DateTimeOffset(2026, 4, 14, 12, 0, 0, TimeSpan.Zero);
         var updatedAtUtc = createdAtUtc.AddMinutes(version);
 
         return new WorkflowDefinition(
             Guid.NewGuid(),
-            "customer-sync",
+            key,
             "Customer Sync",
             version,
             status,
@@ -575,5 +899,17 @@ public class WorkflowDefinitionRepositoryIntegrationTests
             createdAtUtc,
             updatedAtUtc,
             "Executable workflow definition used for persistence tests.");
+    }
+
+    private async Task SeedDefaultTenantAsync()
+    {
+        await using var dbContext = _fixture.CreateDbContext();
+        dbContext.Tenants.Add(new StepTrail.Shared.Entities.Tenant
+        {
+            Id = StepTrailRuntimeDefaults.DefaultTenantId,
+            Name = "Default",
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+        await dbContext.SaveChangesAsync();
     }
 }

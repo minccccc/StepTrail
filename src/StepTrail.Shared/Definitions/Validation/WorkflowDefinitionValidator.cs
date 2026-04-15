@@ -1,3 +1,5 @@
+using StepTrail.Shared.Runtime.Scheduling;
+
 namespace StepTrail.Shared.Definitions;
 
 public sealed class WorkflowDefinitionValidator : IWorkflowDefinitionValidator
@@ -78,6 +80,41 @@ public sealed class WorkflowDefinitionValidator : IWorkflowDefinitionValidator
                         "Webhook trigger HTTP method must not be empty.");
                 }
 
+                var signatureValidation = triggerDefinition.WebhookConfiguration.SignatureValidation;
+                if (signatureValidation is not null)
+                {
+                    if (string.IsNullOrWhiteSpace(signatureValidation.HeaderName))
+                    {
+                        validationResult.AddError(
+                            "workflow.trigger.webhook.signature.headerName.required",
+                            "triggerDefinition.webhookConfiguration.signatureValidation.headerName",
+                            "Webhook signature validation header name must not be empty.");
+                    }
+
+                    if (string.IsNullOrWhiteSpace(signatureValidation.SecretName))
+                    {
+                        validationResult.AddError(
+                            "workflow.trigger.webhook.signature.secretName.required",
+                            "triggerDefinition.webhookConfiguration.signatureValidation.secretName",
+                            "Webhook signature validation secret name must not be empty.");
+                    }
+
+                    if (!Enum.IsDefined(signatureValidation.Algorithm))
+                    {
+                        validationResult.AddError(
+                            "workflow.trigger.webhook.signature.algorithm.unknown",
+                            "triggerDefinition.webhookConfiguration.signatureValidation.algorithm",
+                            $"Webhook signature algorithm '{signatureValidation.Algorithm}' is not supported.");
+                    }
+                }
+
+                ValidateWebhookInputMappings(
+                    triggerDefinition.WebhookConfiguration.InputMappings,
+                    validationResult);
+                ValidateWebhookIdempotencyKeyExtraction(
+                    triggerDefinition.WebhookConfiguration.IdempotencyKeyExtraction,
+                    validationResult);
+
                 break;
 
             case TriggerType.Manual:
@@ -130,12 +167,33 @@ public sealed class WorkflowDefinitionValidator : IWorkflowDefinitionValidator
                     return;
                 }
 
-                if (triggerDefinition.ScheduleConfiguration.IntervalSeconds < 1)
+                var intervalSeconds = triggerDefinition.ScheduleConfiguration.IntervalSeconds;
+                var cronExpression = triggerDefinition.ScheduleConfiguration.CronExpression;
+
+                if ((intervalSeconds.HasValue ? 1 : 0) + (string.IsNullOrWhiteSpace(cronExpression) ? 0 : 1) != 1)
+                {
+                    validationResult.AddError(
+                        "workflow.trigger.schedule.mode.invalid",
+                        "triggerDefinition.scheduleConfiguration",
+                        "Schedule trigger must define exactly one mode: intervalSeconds or cronExpression.");
+                    break;
+                }
+
+                if (intervalSeconds.HasValue && intervalSeconds.Value < 1)
                 {
                     validationResult.AddError(
                         "workflow.trigger.schedule.interval.invalid",
                         "triggerDefinition.scheduleConfiguration.intervalSeconds",
                         "Schedule trigger interval must be 1 second or greater.");
+                }
+
+                if (!string.IsNullOrWhiteSpace(cronExpression)
+                    && !SimpleCronExpression.TryParse(cronExpression, out _, out var cronError))
+                {
+                    validationResult.AddError(
+                        "workflow.trigger.schedule.cron.invalid",
+                        "triggerDefinition.scheduleConfiguration.cronExpression",
+                        $"Schedule trigger cron expression is invalid: {cronError}");
                 }
 
                 break;
@@ -210,6 +268,122 @@ public sealed class WorkflowDefinitionValidator : IWorkflowDefinitionValidator
 
         for (var index = 0; index < stepDefinitions.Count; index++)
             ValidateStep(stepDefinitions[index], index, validationResult);
+    }
+
+    private static void ValidateWebhookInputMappings(
+        IReadOnlyList<WebhookInputMapping> inputMappings,
+        WorkflowDefinitionValidationResult validationResult)
+    {
+        if (inputMappings.Count == 0)
+            return;
+
+        var duplicateTargetPaths = inputMappings
+            .GroupBy(mapping => mapping.TargetPath, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+
+        if (duplicateTargetPaths.Count > 0)
+        {
+            validationResult.AddError(
+                "workflow.trigger.webhook.inputMapping.targetPath.duplicate",
+                "triggerDefinition.webhookConfiguration.inputMappings",
+                $"Webhook input mappings contain duplicate target paths: {string.Join(", ", duplicateTargetPaths)}.");
+        }
+
+        for (var index = 0; index < inputMappings.Count; index++)
+        {
+            var mapping = inputMappings[index];
+            var mappingPath = $"triggerDefinition.webhookConfiguration.inputMappings[{index}]";
+
+            if (string.IsNullOrWhiteSpace(mapping.TargetPath))
+            {
+                validationResult.AddError(
+                    "workflow.trigger.webhook.inputMapping.targetPath.required",
+                    $"{mappingPath}.targetPath",
+                    "Webhook input mapping target path must not be empty.");
+            }
+
+            if (string.IsNullOrWhiteSpace(mapping.SourcePath))
+            {
+                validationResult.AddError(
+                    "workflow.trigger.webhook.inputMapping.sourcePath.required",
+                    $"{mappingPath}.sourcePath",
+                    "Webhook input mapping source path must not be empty.");
+                continue;
+            }
+
+            var sourceSegments = mapping.SourcePath
+                .Split('.', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+            if (sourceSegments.Length == 0)
+            {
+                validationResult.AddError(
+                    "workflow.trigger.webhook.inputMapping.sourcePath.invalid",
+                    $"{mappingPath}.sourcePath",
+                    "Webhook input mapping source path must not be empty.");
+                continue;
+            }
+
+            var root = sourceSegments[0];
+            if (!string.Equals(root, "body", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(root, "headers", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(root, "query", StringComparison.OrdinalIgnoreCase))
+            {
+                validationResult.AddError(
+                    "workflow.trigger.webhook.inputMapping.sourcePath.root.invalid",
+                    $"{mappingPath}.sourcePath",
+                    "Webhook input mapping source path must start with 'body', 'headers', or 'query'.");
+            }
+            else if (!string.Equals(root, "body", StringComparison.OrdinalIgnoreCase)
+                     && sourceSegments.Length < 2)
+            {
+                validationResult.AddError(
+                    "workflow.trigger.webhook.inputMapping.sourcePath.key.required",
+                    $"{mappingPath}.sourcePath",
+                    "Header and query mappings must specify a source key after the root, for example 'headers.x-request-id'.");
+            }
+        }
+    }
+
+    private static void ValidateWebhookIdempotencyKeyExtraction(
+        WebhookIdempotencyKeyExtractionConfiguration? idempotencyKeyExtraction,
+        WorkflowDefinitionValidationResult validationResult)
+    {
+        if (idempotencyKeyExtraction is null)
+            return;
+
+        if (string.IsNullOrWhiteSpace(idempotencyKeyExtraction.SourcePath))
+        {
+            validationResult.AddError(
+                "workflow.trigger.webhook.idempotency.sourcePath.required",
+                "triggerDefinition.webhookConfiguration.idempotencyKeyExtraction.sourcePath",
+                "Webhook idempotency key source path must not be empty.");
+            return;
+        }
+
+        var sourceSegments = idempotencyKeyExtraction.SourcePath
+            .Split('.', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+        if (sourceSegments.Length < 2)
+        {
+            validationResult.AddError(
+                "workflow.trigger.webhook.idempotency.sourcePath.invalid",
+                "triggerDefinition.webhookConfiguration.idempotencyKeyExtraction.sourcePath",
+                "Webhook idempotency key source path must include a root and field path, for example 'headers.x-idempotency-key' or 'body.eventId'.");
+            return;
+        }
+
+        var root = sourceSegments[0];
+        if (!string.Equals(root, "body", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(root, "headers", StringComparison.OrdinalIgnoreCase))
+        {
+            validationResult.AddError(
+                "workflow.trigger.webhook.idempotency.sourcePath.root.invalid",
+                "triggerDefinition.webhookConfiguration.idempotencyKeyExtraction.sourcePath",
+                "Webhook idempotency key source path must start with 'body' or 'headers'.");
+        }
     }
 
     private static void ValidateStep(

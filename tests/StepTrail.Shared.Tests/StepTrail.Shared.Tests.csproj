@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\StepTrail.Api\StepTrail.Api.csproj" />
     <ProjectReference Include="..\..\src\StepTrail.Shared\StepTrail.Shared.csproj" />
+    <ProjectReference Include="..\..\src\StepTrail.Worker\StepTrail.Worker.csproj" />
   </ItemGroup>
 
 </Project>

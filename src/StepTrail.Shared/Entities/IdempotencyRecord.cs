@@ -4,6 +4,7 @@ public class IdempotencyRecord
 {
     public Guid Id { get; set; }
     public Guid TenantId { get; set; }
+    public string WorkflowKey { get; set; } = string.Empty;
     public string IdempotencyKey { get; set; } = string.Empty;
 
     /// <summary>

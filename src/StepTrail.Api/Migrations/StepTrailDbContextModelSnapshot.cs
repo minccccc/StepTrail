@@ -17,7 +17,7 @@ namespace StepTrail.Api.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "9.0.14")
+                .HasAnnotation("ProductVersion", "9.0.15")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -139,12 +139,22 @@ namespace StepTrail.Api.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("version");
 
+                    b.Property<string>("WebhookRouteKey")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("webhook_route_key");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Key")
                         .IsUnique()
                         .HasDatabaseName("ux_executable_workflow_definitions_active_key")
                         .HasFilter("\"status\" = 'Active'");
+
+                    b.HasIndex("WebhookRouteKey")
+                        .IsUnique()
+                        .HasDatabaseName("ux_executable_workflow_definitions_active_webhook_route_key")
+                        .HasFilter("\"status\" = 'Active' AND \"webhook_route_key\" IS NOT NULL");
 
                     b.HasIndex("Key", "Status");
 
@@ -179,11 +189,17 @@ namespace StepTrail.Api.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("workflow_instance_id");
 
+                    b.Property<string>("WorkflowKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("workflow_key");
+
                     b.HasKey("Id");
 
                     b.HasIndex("WorkflowInstanceId");
 
-                    b.HasIndex("TenantId", "IdempotencyKey")
+                    b.HasIndex("TenantId", "WorkflowKey", "IdempotencyKey")
                         .IsUnique();
 
                     b.ToTable("idempotency_records", (string)null);
@@ -200,11 +216,21 @@ namespace StepTrail.Api.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<string>("CronExpression")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("cron_expression");
+
+                    b.Property<string>("ExecutableWorkflowKey")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("executable_workflow_key");
+
                     b.Property<string>("Input")
                         .HasColumnType("jsonb")
                         .HasColumnName("input");
 
-                    b.Property<int>("IntervalSeconds")
+                    b.Property<int?>("IntervalSeconds")
                         .HasColumnType("integer")
                         .HasColumnName("interval_seconds");
 
@@ -228,11 +254,14 @@ namespace StepTrail.Api.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
 
-                    b.Property<Guid>("WorkflowDefinitionId")
+                    b.Property<Guid?>("WorkflowDefinitionId")
                         .HasColumnType("uuid")
                         .HasColumnName("workflow_definition_id");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ExecutableWorkflowKey")
+                        .IsUnique();
 
                     b.HasIndex("TenantId");
 
@@ -241,7 +270,12 @@ namespace StepTrail.Api.Migrations
 
                     b.HasIndex("IsEnabled", "NextRunAt");
 
-                    b.ToTable("recurring_workflow_schedules", (string)null);
+                    b.ToTable("recurring_workflow_schedules", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_recurring_workflow_schedules_schedule_mode", "(interval_seconds IS NOT NULL AND cron_expression IS NULL) OR (interval_seconds IS NULL AND cron_expression IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_recurring_workflow_schedules_target", "(workflow_definition_id IS NOT NULL AND executable_workflow_key IS NULL) OR (workflow_definition_id IS NULL AND executable_workflow_key IS NOT NULL)");
+                        });
                 });
 
             modelBuilder.Entity("StepTrail.Shared.Entities.Tenant", b =>
@@ -719,9 +753,7 @@ namespace StepTrail.Api.Migrations
 
                     b.HasOne("StepTrail.Shared.Entities.WorkflowDefinition", "WorkflowDefinition")
                         .WithMany()
-                        .HasForeignKey("WorkflowDefinitionId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .HasForeignKey("WorkflowDefinitionId");
 
                     b.Navigation("Tenant");
 

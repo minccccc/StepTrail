@@ -13,7 +13,7 @@ public sealed class TenantSeedService : IHostedService
     /// <summary>
     /// The stable ID of the default tenant seeded at startup.
     /// </summary>
-    public static readonly Guid DefaultTenantId = new("00000000-0000-0000-0000-000000000001");
+    public static readonly Guid DefaultTenantId = StepTrailRuntimeDefaults.DefaultTenantId;
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<TenantSeedService> _logger;

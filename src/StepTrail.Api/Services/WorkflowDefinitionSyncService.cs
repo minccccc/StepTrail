@@ -95,8 +95,9 @@ public sealed class WorkflowDefinitionSyncService : IHostedService
             {
                 Id = Guid.NewGuid(),
                 WorkflowDefinitionId = definition.Id,
-                TenantId = TenantSeedService.DefaultTenantId,
+                TenantId = StepTrailRuntimeDefaults.DefaultTenantId,
                 IntervalSeconds = intervalSeconds,
+                CronExpression = null,
                 IsEnabled = true,
                 NextRunAt = now,    // fire on next dispatcher poll
                 CreatedAt = now,
@@ -108,9 +109,10 @@ public sealed class WorkflowDefinitionSyncService : IHostedService
                 "Created recurring schedule for '{Key}' — interval: {Interval}s",
                 definition.Key, intervalSeconds);
         }
-        else if (existing.IntervalSeconds != intervalSeconds)
+        else if (existing.IntervalSeconds != intervalSeconds || existing.CronExpression is not null)
         {
             existing.IntervalSeconds = intervalSeconds;
+            existing.CronExpression = null;
             existing.UpdatedAt = DateTimeOffset.UtcNow;
 
             await db.SaveChangesAsync(ct);

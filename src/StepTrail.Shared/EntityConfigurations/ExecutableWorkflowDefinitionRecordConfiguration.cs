@@ -13,6 +13,7 @@ public class ExecutableWorkflowDefinitionRecordConfiguration : IEntityTypeConfig
         builder.HasKey(definition => definition.Id);
         builder.Property(definition => definition.Id).HasColumnName("id").ValueGeneratedNever();
         builder.Property(definition => definition.Key).HasColumnName("key").HasMaxLength(200).IsRequired();
+        builder.Property(definition => definition.WebhookRouteKey).HasColumnName("webhook_route_key").HasMaxLength(200);
         builder.Property(definition => definition.Name).HasColumnName("name").HasMaxLength(200).IsRequired();
         builder.Property(definition => definition.Version).HasColumnName("version").IsRequired();
         builder.Property(definition => definition.Status)
@@ -30,6 +31,10 @@ public class ExecutableWorkflowDefinitionRecordConfiguration : IEntityTypeConfig
             .HasDatabaseName("ux_executable_workflow_definitions_active_key")
             .IsUnique()
             .HasFilter("\"status\" = 'Active'");
+        builder.HasIndex(definition => definition.WebhookRouteKey)
+            .HasDatabaseName("ux_executable_workflow_definitions_active_webhook_route_key")
+            .IsUnique()
+            .HasFilter("\"status\" = 'Active' AND \"webhook_route_key\" IS NOT NULL");
 
         builder.HasOne(definition => definition.TriggerDefinition)
             .WithOne(trigger => trigger.WorkflowDefinition)
