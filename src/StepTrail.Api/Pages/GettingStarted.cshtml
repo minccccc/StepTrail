@@ -1,0 +1,181 @@
+@page "/ops/getting-started"
+@model StepTrail.Api.Pages.GettingStartedModel
+@{
+    ViewData["Title"] = "Getting Started";
+    var step1Done = Model.TemplateCount > 0 || Model.WorkflowDefinitionCount > 0;
+    var step2Done = Model.WorkflowDefinitionCount > 0;
+    var step3Done = Model.ActiveWorkflowCount > 0;
+    var step4Done = Model.InstanceCount > 0;
+}
+
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+
+        <h1 class="h3 mb-2">Getting Started with StepTrail</h1>
+        <p class="text-muted mb-4">
+            Follow these steps to set up your first workflow and run it end-to-end.
+        </p>
+
+        @* ── Step 1: Choose a starting point ── *@
+        <div class="card shadow-sm mb-3 @(step1Done ? "border-success" : "")">
+            <div class="card-body">
+                <div class="d-flex align-items-start gap-3">
+                    <span class="badge @(step1Done ? "bg-success" : "bg-primary") fs-6 mt-1">1</span>
+                    <div class="flex-grow-1">
+                        <h5 class="mb-1">Choose a starting point</h5>
+                        <p class="text-muted small mb-2">
+                            Pick a predefined template or create a workflow from scratch.
+                        </p>
+                        <div class="d-flex gap-2 flex-wrap">
+                            <a href="/ops/templates" class="btn btn-sm btn-outline-primary">Browse Templates (@Model.TemplateCount available)</a>
+                            <a href="/ops/definitions/new" class="btn btn-sm btn-outline-secondary">Create Manually</a>
+                        </div>
+                        @if (step1Done)
+                        {
+                            <div class="text-success small mt-2">You have @Model.WorkflowDefinitionCount workflow definition(s).</div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        @* ── Step 2: Configure trigger and steps ── *@
+        <div class="card shadow-sm mb-3 @(step2Done ? "border-success" : "")">
+            <div class="card-body">
+                <div class="d-flex align-items-start gap-3">
+                    <span class="badge @(step2Done ? "bg-success" : "bg-secondary") fs-6 mt-1">2</span>
+                    <div class="flex-grow-1">
+                        <h5 class="mb-1">Configure trigger and steps</h5>
+                        <p class="text-muted small mb-2">
+                            Open a workflow definition and configure how it starts (trigger) and what it does (steps).
+                        </p>
+                        <ul class="small text-muted mb-2">
+                            <li><strong>Trigger types:</strong> Webhook (receive HTTP), Manual (ops console), API (programmatic), Schedule (cron/interval)</li>
+                            <li><strong>Step types:</strong> HTTP Request, Send Webhook, Transform, Conditional, Delay</li>
+                            <li>Each step has a retry policy you can customize (attempts, backoff, timeout)</li>
+                        </ul>
+                        <a href="/ops/definitions" class="btn btn-sm btn-outline-primary">Go to Workflows</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        @* ── Step 3: Activate ── *@
+        <div class="card shadow-sm mb-3 @(step3Done ? "border-success" : "")">
+            <div class="card-body">
+                <div class="d-flex align-items-start gap-3">
+                    <span class="badge @(step3Done ? "bg-success" : "bg-secondary") fs-6 mt-1">3</span>
+                    <div class="flex-grow-1">
+                        <h5 class="mb-1">Activate</h5>
+                        <p class="text-muted small mb-2">
+                            Once your trigger and steps are configured, activate the workflow definition.
+                            Only active definitions can be triggered.
+                        </p>
+                        @if (step3Done)
+                        {
+                            <div class="text-success small">You have @Model.ActiveWorkflowCount active workflow(s).</div>
+                        }
+                        else
+                        {
+                            <p class="text-muted small">Open a workflow definition and click <strong>Activate</strong> in the "Review & Activate" section at the bottom.</p>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        @* ── Step 4: Trigger a test run ── *@
+        <div class="card shadow-sm mb-3 @(step4Done ? "border-success" : "")">
+            <div class="card-body">
+                <div class="d-flex align-items-start gap-3">
+                    <span class="badge @(step4Done ? "bg-success" : "bg-secondary") fs-6 mt-1">4</span>
+                    <div class="flex-grow-1">
+                        <h5 class="mb-1">Trigger a test run</h5>
+                        <p class="text-muted small mb-2">
+                            Start your first workflow instance to verify everything works.
+                        </p>
+                        <div class="mb-2">
+                            <p class="small fw-semibold mb-1">Manual trigger (from the UI):</p>
+                            <a href="/ops/workflows/create" class="btn btn-sm btn-outline-primary">Run Workflow</a>
+                        </div>
+                        <div class="mb-2">
+                            <p class="small fw-semibold mb-1">Webhook trigger (from the command line):</p>
+                            <pre class="json-block mb-0" style="max-height:80px">curl -X POST http://localhost:5000/webhooks/YOUR-ROUTE-KEY \
+  -H "Content-Type: application/json" \
+  -d '{ "test": true }'</pre>
+                        </div>
+                        <div>
+                            <p class="small fw-semibold mb-1">API trigger:</p>
+                            <pre class="json-block mb-0" style="max-height:80px">curl -X POST http://localhost:5000/api-triggers/YOUR-WORKFLOW-KEY \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR-SECRET" \
+  -d '{ "test": true }'</pre>
+                        </div>
+                        @if (step4Done)
+                        {
+                            <div class="text-success small mt-2">You have @Model.InstanceCount instance(s) already.</div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        @* ── Step 5: Inspect ── *@
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <div class="d-flex align-items-start gap-3">
+                    <span class="badge bg-secondary fs-6 mt-1">5</span>
+                    <div class="flex-grow-1">
+                        <h5 class="mb-1">Inspect the result</h5>
+                        <p class="text-muted small mb-2">
+                            Check the instance in the Instances list. Click into it to see the Trail view
+                            with step-by-step execution details, timing, and any errors.
+                        </p>
+                        <ul class="small text-muted mb-2">
+                            <li>Green = step completed successfully</li>
+                            <li>Red = step failed (check error details and retry history)</li>
+                            <li>Use <strong>Retry</strong> to re-run from the failed step, or <strong>Replay</strong> to restart from step 1</li>
+                        </ul>
+                        <a href="/ops/workflows" class="btn btn-sm btn-outline-primary">Go to Instances</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        @* ── Quick Reference ── *@
+        <div class="card shadow-sm mb-4">
+            <div class="card-header fw-semibold">Quick Reference</div>
+            <div class="card-body">
+                <table class="table table-sm small mb-0">
+                    <tbody>
+                        <tr>
+                            <td class="text-muted">API docs</td>
+                            <td><a href="/scalar/v1" target="_blank">/scalar/v1</a></td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Health check</td>
+                            <td><code>GET /health</code></td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Webhook endpoint</td>
+                            <td><code>POST /webhooks/{'{'}route-key{'}'}</code></td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">API trigger</td>
+                            <td><code>POST /api-triggers/{'{'}workflow-key{'}'}</code></td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Secrets management</td>
+                            <td><code>PUT /secrets/{'{'}name{'}'}</code> — store values referenced as <code>{{"{{secrets.name}}"}}</code></td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Default credentials</td>
+                            <td><code>admin / admin</code> (override via <code>Ops__Username</code>, <code>Ops__Password</code>)</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+</div>

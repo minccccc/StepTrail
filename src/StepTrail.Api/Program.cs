@@ -13,6 +13,7 @@ using StepTrail.Api.Workflows;
 using StepTrail.Shared;
 using StepTrail.Shared.Definitions;
 using StepTrail.Shared.Runtime.AvailableFields;
+using StepTrail.Shared.Telemetry;
 using StepTrail.Shared.Workflows;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -76,6 +77,7 @@ builder.Services.AddScoped<WebhookSignatureValidationService>();
 builder.Services.AddScoped<WebhookWorkflowTriggerService>();
 builder.Services.AddScoped<WorkflowRetryService>();
 builder.Services.AddScoped<WorkflowQueryService>();
+builder.Services.AddScoped<StepTrail.Shared.Telemetry.TelemetryService>();
 
 var app = builder.Build();
 
@@ -445,6 +447,7 @@ ops.MapPost("/workflow-definitions/from-descriptor", async (
     CreateFromDescriptorRequest request,
     IWorkflowRegistry registry,
     IWorkflowDefinitionRepository repository,
+    TelemetryService telemetry,
     CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(request.Name))
@@ -507,6 +510,10 @@ ops.MapPost("/workflow-definitions/from-descriptor", async (
         return Results.Conflict(new { error = ex.Message });
     }
 
+    await telemetry.RecordAsync(TelemetryEvents.WorkflowCreatedFromTemplate, TelemetryEvents.Categories.Authoring, ct,
+        workflowKey: definition.Key, workflowDefinitionId: definition.Id, triggerType: triggerType.ToString(),
+        metadata: new { descriptorKey = descriptor.Key, descriptorVersion = descriptor.Version, stepCount = steps.Count });
+
     return Results.Created(
         $"/workflow-definitions/{definition.Id}",
         new { id = definition.Id, key = definition.Key, name = definition.Name, status = definition.Status.ToString() });
@@ -515,6 +522,7 @@ ops.MapPost("/workflow-definitions/from-descriptor", async (
 ops.MapPost("/workflow-definitions/blank", async (
     CreateBlankDefinitionRequest request,
     IWorkflowDefinitionRepository repository,
+    TelemetryService telemetry,
     CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(request.Name))
@@ -551,6 +559,9 @@ ops.MapPost("/workflow-definitions/blank", async (
         return Results.Conflict(new { error = ex.Message });
     }
 
+    await telemetry.RecordAsync(TelemetryEvents.WorkflowCreatedBlank, TelemetryEvents.Categories.Authoring, ct,
+        workflowKey: definition.Key, workflowDefinitionId: definition.Id, triggerType: triggerType.ToString());
+
     return Results.Created(
         $"/workflow-definitions/{definition.Id}",
         new { id = definition.Id, key = definition.Key, name = definition.Name, status = definition.Status.ToString() });
@@ -559,6 +570,7 @@ ops.MapPost("/workflow-definitions/blank", async (
 ops.MapPost("/workflow-definitions/clone", async (
     CloneWorkflowDefinitionRequest request,
     IWorkflowDefinitionRepository repository,
+    TelemetryService telemetry,
     CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(request.Name))
@@ -614,6 +626,10 @@ ops.MapPost("/workflow-definitions/clone", async (
     {
         return Results.Conflict(new { error = ex.Message });
     }
+
+    await telemetry.RecordAsync(TelemetryEvents.WorkflowCloned, TelemetryEvents.Categories.Authoring, ct,
+        workflowKey: cloned.Key, workflowDefinitionId: cloned.Id,
+        metadata: new { clonedFromId = request.TemplateId, clonedFromKey = template.Key });
 
     return Results.Created(
         $"/workflow-definitions/{cloned.Id}",
@@ -1027,6 +1043,7 @@ ops.MapPost("/workflow-definitions/{id:guid}/steps/{stepKey}/move-down", async (
 ops.MapPost("/workflow-definitions/{id:guid}/activate", async (
     Guid id,
     IWorkflowDefinitionRepository repository,
+    TelemetryService telemetry,
     CancellationToken ct) =>
 {
     var definition = await repository.GetByIdAsync(id, ct);
@@ -1053,6 +1070,9 @@ ops.MapPost("/workflow-definitions/{id:guid}/activate", async (
     catch (WorkflowDefinitionValidationException ex)
     {
         var errors = ex.ValidationResult.Errors.Select(e => e.Message).ToList();
+        await telemetry.RecordAsync(TelemetryEvents.ActivationFailed, TelemetryEvents.Categories.Error, ct,
+            workflowKey: definition.Key, workflowDefinitionId: id,
+            metadata: new { errors });
         return Results.BadRequest(new { error = "Activation validation failed.", errors });
     }
     catch (InvalidOperationException ex)
@@ -1060,12 +1080,18 @@ ops.MapPost("/workflow-definitions/{id:guid}/activate", async (
         return Results.Conflict(new { error = ex.Message });
     }
 
+    await telemetry.RecordAsync(TelemetryEvents.WorkflowActivated, TelemetryEvents.Categories.Authoring, ct,
+        workflowKey: definition.Key, workflowDefinitionId: id,
+        triggerType: definition.TriggerDefinition.Type.ToString(),
+        metadata: new { stepCount = definition.StepDefinitions.Count });
+
     return Results.Ok(new { id, status = "Active" });
 });
 
 ops.MapPost("/workflow-definitions/{id:guid}/deactivate", async (
     Guid id,
     StepTrailDbContext db,
+    TelemetryService telemetry,
     CancellationToken ct) =>
 {
     var record = await db.ExecutableWorkflowDefinitions.FindAsync([id], ct);
@@ -1081,6 +1107,9 @@ ops.MapPost("/workflow-definitions/{id:guid}/deactivate", async (
     record.Status = WorkflowDefinitionStatus.Inactive;
     record.UpdatedAtUtc = DateTimeOffset.UtcNow;
     await db.SaveChangesAsync(ct);
+
+    await telemetry.RecordAsync(TelemetryEvents.WorkflowDeactivated, TelemetryEvents.Categories.Authoring, ct,
+        workflowKey: record.Key, workflowDefinitionId: id);
 
     return Results.Ok(new { id, status = "Inactive" });
 });
@@ -1241,11 +1270,14 @@ ops.MapGet("/workflow-instances/{id:guid}/timeline", async (
 ops.MapPost("/workflow-instances/{id:guid}/retry", async (
     Guid id,
     WorkflowRetryService service,
+    TelemetryService telemetry,
     CancellationToken ct) =>
 {
     try
     {
         var response = await service.RetryAsync(id, ct);
+        await telemetry.RecordAsync(TelemetryEvents.ManualRetryTriggered, TelemetryEvents.Categories.Execution, ct,
+            workflowInstanceId: id);
         return Results.Ok(response);
     }
     catch (WorkflowInstanceNotFoundException ex)
@@ -1261,11 +1293,14 @@ ops.MapPost("/workflow-instances/{id:guid}/retry", async (
 ops.MapPost("/workflow-instances/{id:guid}/replay", async (
     Guid id,
     WorkflowRetryService service,
+    TelemetryService telemetry,
     CancellationToken ct) =>
 {
     try
     {
         var response = await service.ReplayAsync(id, ct);
+        await telemetry.RecordAsync(TelemetryEvents.ReplayTriggered, TelemetryEvents.Categories.Execution, ct,
+            workflowInstanceId: id);
         return Results.Ok(response);
     }
     catch (WorkflowInstanceNotFoundException ex)
@@ -1379,6 +1414,51 @@ ops.MapDelete("/secrets/{name}", async (
     db.WorkflowSecrets.Remove(secret);
     await db.SaveChangesAsync(ct);
     return Results.NoContent();
+});
+
+// ── Telemetry ────────────────────────────────────────────────────────────────
+
+ops.MapGet("/telemetry", async (
+    string? category,
+    int? days,
+    StepTrailDbContext db,
+    CancellationToken ct) =>
+{
+    var since = DateTimeOffset.UtcNow.AddDays(-(days ?? 30));
+
+    var query = db.PilotTelemetryEvents
+        .Where(e => e.OccurredAtUtc >= since);
+
+    if (!string.IsNullOrWhiteSpace(category))
+        query = query.Where(e => e.Category == category);
+
+    var events = await query
+        .OrderByDescending(e => e.OccurredAtUtc)
+        .Take(500)
+        .Select(e => new
+        {
+            e.EventName,
+            e.Category,
+            e.OccurredAtUtc,
+            e.WorkflowKey,
+            e.WorkflowDefinitionId,
+            e.WorkflowInstanceId,
+            e.TriggerType,
+            e.StepType,
+            e.ActorId,
+            e.Metadata
+        })
+        .ToListAsync(ct);
+
+    var summary = await db.PilotTelemetryEvents
+        .Where(e => e.OccurredAtUtc >= since)
+        .GroupBy(e => new { e.Category, e.EventName })
+        .Select(g => new { g.Key.Category, g.Key.EventName, Count = g.Count() })
+        .OrderBy(g => g.Category)
+        .ThenByDescending(g => g.Count)
+        .ToListAsync(ct);
+
+    return Results.Ok(new { since, summary, recentEvents = events });
 });
 
 app.Run();

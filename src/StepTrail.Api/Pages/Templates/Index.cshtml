@@ -20,7 +20,12 @@
 else if (!Model.Definitions.Any())
 {
     <div class="alert alert-secondary">
-        No workflows found. Create one from a template or manually.
+        <strong>No workflow definitions yet.</strong>
+        <div class="mt-2">
+            <a href="/ops/templates">Browse templates</a> to start from a predefined blueprint,
+            or <a href="/ops/definitions/new">create one manually</a>.
+            <a href="/ops/getting-started" class="ms-2">Getting Started guide</a>
+        </div>
     </div>
 }
 else

@@ -1,12 +1,14 @@
 namespace StepTrail.Worker.Alerts;
 
 /// <summary>
-/// Data carried in every alert notification.
+/// Normalized data carried in every alert notification.
+/// Contains enough context for external receivers (webhook, email) to be useful
+/// without needing to call back into the API for details.
 /// </summary>
 public sealed class AlertPayload
 {
     /// <summary>
-    /// "WorkflowFailed" or "StepOrphaned".
+    /// Alert condition that triggered this notification (e.g. "WorkflowFailed", "StuckExecutionDetected").
     /// </summary>
     public string AlertType { get; init; } = string.Empty;
 
@@ -18,7 +20,17 @@ public sealed class AlertPayload
     public string WorkflowKey { get; init; } = string.Empty;
 
     /// <summary>
-    /// The step key that triggered the alert.
+    /// The workflow definition version at the time of the alert, if available.
+    /// </summary>
+    public int? WorkflowVersion { get; init; }
+
+    /// <summary>
+    /// Current workflow instance status (e.g. "Failed", "AwaitingRetry").
+    /// </summary>
+    public string? Status { get; init; }
+
+    /// <summary>
+    /// The step key where the failure or condition occurred.
     /// </summary>
     public string StepKey { get; init; } = string.Empty;
 
@@ -28,9 +40,14 @@ public sealed class AlertPayload
     public int Attempt { get; init; }
 
     /// <summary>
-    /// Error message or timeout reason.
+    /// Human-readable summary of what happened.
+    /// </summary>
+    public string Message { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Detailed error message or timeout reason, if available.
     /// </summary>
     public string? Error { get; init; }
 
-    public DateTimeOffset OccurredAt { get; init; }
+    public DateTimeOffset OccurredAtUtc { get; init; }
 }

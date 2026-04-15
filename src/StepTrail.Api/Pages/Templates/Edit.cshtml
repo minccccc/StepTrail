@@ -545,6 +545,36 @@ else if (def is not null)
                        class="btn btn-outline-primary btn-sm">View Instances</a>
                 }
             </div>
+
+            @if (def.Status == "Active")
+            {
+                <hr class="my-3" />
+                <h6 class="fw-semibold mb-2">Test your workflow</h6>
+                <p class="text-muted small mb-2">Your workflow is active and ready to receive triggers.</p>
+
+                @switch (def.Trigger.Type)
+                {
+                    case "Manual":
+                        <p class="small mb-1"><a href="/ops/workflows/create" class="btn btn-sm btn-outline-primary">Run from Ops Console</a></p>
+                        break;
+                    case "Webhook":
+                        <p class="small fw-semibold mb-1">Send a test webhook:</p>
+                        <pre class="json-block mb-2" style="max-height:80px">curl -X POST http://localhost:5000/webhooks/@(def.Trigger.RouteKey ?? def.Key) \
+  -H "Content-Type: application/json" \
+  -d '{ "test": true }'</pre>
+                        break;
+                    case "Api":
+                        <p class="small fw-semibold mb-1">Send a test API request:</p>
+                        <pre class="json-block mb-2" style="max-height:80px">curl -X POST http://localhost:5000/api-triggers/@def.Key \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR-SECRET" \
+  -d '{ "test": true }'</pre>
+                        break;
+                    case "Schedule":
+                        <p class="small text-muted">This workflow runs on a schedule. Instances will be created automatically.</p>
+                        break;
+                }
+            }
         </div>
     </div>
 }

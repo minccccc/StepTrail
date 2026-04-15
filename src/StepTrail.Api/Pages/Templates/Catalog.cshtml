@@ -21,8 +21,11 @@
 else if (!Model.Templates.Any())
 {
     <div class="alert alert-secondary">
-        No templates available. Templates are registered programmatically as workflow descriptors.
-        <br />You can still <a href="/ops/definitions/new">create a workflow manually</a>.
+        <strong>No templates available.</strong> Templates are predefined workflow blueprints registered in code.
+        <div class="mt-2">
+            You can still <a href="/ops/definitions/new">create a workflow manually</a> from scratch.
+            <a href="/ops/getting-started" class="ms-2">Getting Started guide</a>
+        </div>
     </div>
 }
 else

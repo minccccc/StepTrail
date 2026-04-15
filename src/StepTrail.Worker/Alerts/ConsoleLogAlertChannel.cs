@@ -11,19 +11,23 @@ public sealed class ConsoleLogAlertChannel : IAlertChannel
     public ConsoleLogAlertChannel(ILogger<ConsoleLogAlertChannel> logger)
         => _logger = logger;
 
-    public Task SendAsync(AlertPayload payload, CancellationToken ct)
+    public string ChannelName => "ConsoleLog";
+
+    public Task<AlertDeliveryResult> SendAsync(AlertPayload payload, CancellationToken ct)
     {
         _logger.LogWarning(
-            "[ALERT:{AlertType}] Workflow '{WorkflowKey}' instance {InstanceId} | " +
-            "Step '{StepKey}' attempt {Attempt} | Error: {Error} | At: {OccurredAt:O}",
+            "[ALERT:{AlertType}] Workflow '{WorkflowKey}' v{Version} instance {InstanceId} | " +
+            "Step '{StepKey}' attempt {Attempt} | {Message} | Error: {Error} | At: {OccurredAt:O}",
             payload.AlertType,
             payload.WorkflowKey,
+            payload.WorkflowVersion,
             payload.WorkflowInstanceId,
             payload.StepKey,
             payload.Attempt,
+            payload.Message,
             payload.Error,
-            payload.OccurredAt);
+            payload.OccurredAtUtc);
 
-        return Task.CompletedTask;
+        return Task.FromResult(new AlertDeliveryResult(true));
     }
 }

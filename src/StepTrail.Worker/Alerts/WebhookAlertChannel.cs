@@ -24,19 +24,24 @@ public sealed class WebhookAlertChannel : IAlertChannel
         _logger = logger;
     }
 
-    public async Task SendAsync(AlertPayload payload, CancellationToken ct)
+    public string ChannelName => "Webhook";
+
+    public async Task<AlertDeliveryResult> SendAsync(AlertPayload payload, CancellationToken ct)
     {
         var httpClient = _httpClientFactory.CreateClient("AlertWebhook");
 
         var response = await httpClient.PostAsJsonAsync(_webhookUrl, payload, ct);
 
         if (!response.IsSuccessStatusCode)
-            _logger.LogWarning(
-                "Webhook alert delivery failed — {StatusCode} from {Url}",
-                (int)response.StatusCode, _webhookUrl);
-        else
-            _logger.LogDebug(
-                "Webhook alert [{AlertType}] delivered to {Url}",
-                payload.AlertType, _webhookUrl);
+        {
+            var error = $"HTTP {(int)response.StatusCode} from {_webhookUrl}";
+            _logger.LogWarning("Webhook alert delivery failed — {Error}", error);
+            return new AlertDeliveryResult(false, error);
+        }
+
+        _logger.LogDebug(
+            "Webhook alert [{AlertType}] delivered to {Url}",
+            payload.AlertType, _webhookUrl);
+        return new AlertDeliveryResult(true);
     }
 }

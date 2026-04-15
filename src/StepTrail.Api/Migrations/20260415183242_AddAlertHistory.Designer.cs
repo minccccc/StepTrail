@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using StepTrail.Shared;
@@ -11,9 +12,11 @@ using StepTrail.Shared;
 namespace StepTrail.Api.Migrations
 {
     [DbContext(typeof(StepTrailDbContext))]
-    partial class StepTrailDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260415183242_AddAlertHistory")]
+    partial class AddAlertHistory
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -304,72 +307,6 @@ namespace StepTrail.Api.Migrations
                         .IsUnique();
 
                     b.ToTable("idempotency_records", (string)null);
-                });
-
-            modelBuilder.Entity("StepTrail.Shared.Entities.PilotTelemetryEvent", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<string>("ActorId")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)")
-                        .HasColumnName("actor_id");
-
-                    b.Property<string>("Category")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)")
-                        .HasColumnName("category");
-
-                    b.Property<string>("EventName")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)")
-                        .HasColumnName("event_name");
-
-                    b.Property<string>("Metadata")
-                        .HasColumnType("jsonb")
-                        .HasColumnName("metadata");
-
-                    b.Property<DateTimeOffset>("OccurredAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("occurred_at_utc");
-
-                    b.Property<string>("StepType")
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)")
-                        .HasColumnName("step_type");
-
-                    b.Property<string>("TriggerType")
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)")
-                        .HasColumnName("trigger_type");
-
-                    b.Property<Guid?>("WorkflowDefinitionId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("workflow_definition_id");
-
-                    b.Property<Guid?>("WorkflowInstanceId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("workflow_instance_id");
-
-                    b.Property<string>("WorkflowKey")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)")
-                        .HasColumnName("workflow_key");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Category");
-
-                    b.HasIndex("EventName");
-
-                    b.HasIndex("OccurredAtUtc");
-
-                    b.ToTable("pilot_telemetry_events", (string)null);
                 });
 
             modelBuilder.Entity("StepTrail.Shared.Entities.RecurringWorkflowSchedule", b =>

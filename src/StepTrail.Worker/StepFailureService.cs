@@ -4,6 +4,7 @@ using StepTrail.Shared;
 using StepTrail.Shared.Definitions;
 using StepTrail.Shared.Entities;
 using StepTrail.Shared.Workflows;
+using StepTrail.Shared.Telemetry;
 using StepTrail.Worker.Alerts;
 
 namespace StepTrail.Worker;
@@ -25,12 +26,21 @@ public sealed class StepFailureService
 {
     private readonly StepTrailDbContext _db;
     private readonly AlertService _alertService;
+    private readonly AlertRuleEvaluator _alertRuleEvaluator;
+    private readonly TelemetryService _telemetry;
     private readonly ILogger<StepFailureService> _logger;
 
-    public StepFailureService(StepTrailDbContext db, AlertService alertService, ILogger<StepFailureService> logger)
+    public StepFailureService(
+        StepTrailDbContext db,
+        AlertService alertService,
+        AlertRuleEvaluator alertRuleEvaluator,
+        TelemetryService telemetry,
+        ILogger<StepFailureService> logger)
     {
         _db = db;
         _alertService = alertService;
+        _alertRuleEvaluator = alertRuleEvaluator;
+        _telemetry = telemetry;
         _logger = logger;
     }
 
@@ -172,34 +182,53 @@ public sealed class StepFailureService
         await _db.SaveChangesAsync(ct);
 
         // Fire alerts after the DB commit so we never alert on a rolled-back failure.
-        workflowKey ??= await ResolveWorkflowKeyAsync(execution.WorkflowInstanceId, execution.WorkflowDefinitionStepId, ct);
+        // Each alert is gated by the AlertRuleEvaluator so rules can be disabled without
+        // changing the failure handling logic.
+        var (resolvedKey, resolvedVersion) = await ResolveWorkflowContextAsync(
+            execution.WorkflowInstanceId, execution.WorkflowDefinitionStepId, workflowKey, ct);
 
-        if (failureEventType == WorkflowEventTypes.StepOrphaned)
+        if (failureEventType == WorkflowEventTypes.StepOrphaned
+            && _alertRuleEvaluator.ShouldAlert(AlertRuleType.StuckExecutionDetected))
         {
             await _alertService.SendAsync(new AlertPayload
             {
-                AlertType = "StepOrphaned",
+                AlertType = AlertRuleType.StuckExecutionDetected.ToString(),
                 WorkflowInstanceId = execution.WorkflowInstanceId,
-                WorkflowKey = workflowKey,
+                WorkflowKey = resolvedKey,
+                WorkflowVersion = resolvedVersion,
+                Status = "Running",
                 StepKey = execution.StepKey,
                 Attempt = execution.Attempt,
+                Message = $"Stuck execution detected for step '{execution.StepKey}' — worker may have crashed",
                 Error = error,
-                OccurredAt = now
+                OccurredAtUtc = now
+            }, ct);
+        }
+
+        if (workflowFailed
+            && _alertRuleEvaluator.ShouldAlert(AlertRuleType.WorkflowFailed))
+        {
+            await _alertService.SendAsync(new AlertPayload
+            {
+                AlertType = AlertRuleType.WorkflowFailed.ToString(),
+                WorkflowInstanceId = execution.WorkflowInstanceId,
+                WorkflowKey = resolvedKey,
+                WorkflowVersion = resolvedVersion,
+                Status = "Failed",
+                StepKey = execution.StepKey,
+                Attempt = execution.Attempt,
+                Message = $"Workflow failed after {execution.Attempt} attempt(s) on step '{execution.StepKey}'",
+                Error = error,
+                OccurredAtUtc = now
             }, ct);
         }
 
         if (workflowFailed)
         {
-            await _alertService.SendAsync(new AlertPayload
-            {
-                AlertType = "WorkflowFailed",
-                WorkflowInstanceId = execution.WorkflowInstanceId,
-                WorkflowKey = workflowKey,
-                StepKey = execution.StepKey,
-                Attempt = execution.Attempt,
-                Error = error,
-                OccurredAt = now
-            }, ct);
+            await _telemetry.RecordAsync(TelemetryEvents.WorkflowFailed, TelemetryEvents.Categories.Execution, ct,
+                workflowKey: resolvedKey, workflowInstanceId: execution.WorkflowInstanceId,
+                metadata: new { stepKey = execution.StepKey, attempt = execution.Attempt,
+                    classification = failureClassification?.ToString() });
         }
     }
 
@@ -250,14 +279,18 @@ public sealed class StepFailureService
             backoffStrategy = backoffStrategy.ToString()
         });
 
-    private async Task<string> ResolveWorkflowKeyAsync(Guid workflowInstanceId, Guid? workflowDefinitionStepId, CancellationToken ct)
+    private async Task<(string key, int? version)> ResolveWorkflowContextAsync(
+        Guid workflowInstanceId, Guid? workflowDefinitionStepId, string? knownKey, CancellationToken ct)
     {
         var instance = await _db.WorkflowInstances
             .AsNoTracking()
             .FirstOrDefaultAsync(i => i.Id == workflowInstanceId, ct);
 
-        if (!string.IsNullOrWhiteSpace(instance?.WorkflowDefinitionKey))
-            return instance.WorkflowDefinitionKey!;
+        if (instance is not null && !string.IsNullOrWhiteSpace(instance.WorkflowDefinitionKey))
+            return (instance.WorkflowDefinitionKey!, instance.WorkflowDefinitionVersion);
+
+        if (!string.IsNullOrWhiteSpace(knownKey))
+            return (knownKey, instance?.WorkflowDefinitionVersion);
 
         if (workflowDefinitionStepId.HasValue)
         {
@@ -265,17 +298,17 @@ public sealed class StepFailureService
                 .AsNoTracking()
                 .FirstOrDefaultAsync(step => step.Id == workflowDefinitionStepId.Value, ct);
 
-            if (stepDefinition is null)
-                return workflowInstanceId.ToString();
+            if (stepDefinition is not null)
+            {
+                var definition = await _db.WorkflowDefinitions
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(workflow => workflow.Id == stepDefinition.WorkflowDefinitionId, ct);
 
-            var definition = await _db.WorkflowDefinitions
-                .AsNoTracking()
-                .FirstOrDefaultAsync(workflow => workflow.Id == stepDefinition.WorkflowDefinitionId, ct);
-
-            if (!string.IsNullOrWhiteSpace(definition?.Key))
-                return definition.Key;
+                if (definition is not null)
+                    return (definition.Key, definition.Version);
+            }
         }
 
-        return workflowInstanceId.ToString();
+        return (workflowInstanceId.ToString(), null);
     }
 }

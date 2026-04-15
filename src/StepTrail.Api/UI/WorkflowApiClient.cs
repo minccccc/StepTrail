@@ -448,6 +448,18 @@ public sealed class WorkflowApiClient
         catch { /* not JSON — fall through */ }
         return null;
     }
+
+    public async Task<TelemetryDashboard?> GetTelemetryAsync(int days = 30, CancellationToken ct = default)
+    {
+        try
+        {
+            return await _http.GetFromJsonAsync<TelemetryDashboard>($"/telemetry?days={days}", ct);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }
 
 // ── Result types ─────────────────────────────────────────────────────────────────
@@ -487,6 +499,34 @@ public sealed class CloneDefinitionResponse
     public string Key { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
     public string Status { get; init; } = string.Empty;
+}
+
+public sealed class TelemetryDashboard
+{
+    public DateTimeOffset Since { get; init; }
+    public IReadOnlyList<TelemetrySummaryEntry> Summary { get; init; } = [];
+    public IReadOnlyList<TelemetryRecentEvent> RecentEvents { get; init; } = [];
+}
+
+public sealed class TelemetrySummaryEntry
+{
+    public string Category { get; init; } = string.Empty;
+    public string EventName { get; init; } = string.Empty;
+    public int Count { get; init; }
+}
+
+public sealed class TelemetryRecentEvent
+{
+    public string EventName { get; init; } = string.Empty;
+    public string Category { get; init; } = string.Empty;
+    public DateTimeOffset OccurredAtUtc { get; init; }
+    public string? WorkflowKey { get; init; }
+    public Guid? WorkflowDefinitionId { get; init; }
+    public Guid? WorkflowInstanceId { get; init; }
+    public string? TriggerType { get; init; }
+    public string? StepType { get; init; }
+    public string? ActorId { get; init; }
+    public string? Metadata { get; init; }
 }
 
 // ── API response DTOs used only by the client ────────────────────────────────────

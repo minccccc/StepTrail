@@ -344,7 +344,9 @@ public class StepFailureServiceIntegrationTests
 
     private StepFailureService CreateService(StepTrailDbContext db) =>
         new(db,
-            new AlertService([], NullLogger<AlertService>.Instance),
+            new AlertService([], db, NullLogger<AlertService>.Instance),
+            AlertRuleEvaluator.CreateDefault(),
+            new StepTrail.Shared.Telemetry.TelemetryService(db, NullLogger<StepTrail.Shared.Telemetry.TelemetryService>.Instance),
             NullLogger<StepFailureService>.Instance);
 
     private async Task<(Guid tenantId, Guid instanceId)> SeedWorkflowInstanceAsync()

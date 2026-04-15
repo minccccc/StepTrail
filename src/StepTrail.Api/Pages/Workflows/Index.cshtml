@@ -86,11 +86,16 @@
 else if (!Model.Result.Items.Any())
 {
     <div class="alert alert-secondary">
-        No workflow instances found.
+        <strong>No workflow instances found.</strong>
         @if (!Model.ShowArchived)
         {
             <span>Archived instances are hidden — enable the <strong>Archived</strong> checkbox to include them.</span>
         }
+        <div class="mt-2">
+            To create your first instance, <a href="/ops/workflows/create">run a workflow manually</a>
+            or trigger one via webhook/API.
+            <a href="/ops/getting-started" class="ms-2">Getting Started guide</a>
+        </div>
     </div>
 }
 else
