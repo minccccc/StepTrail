@@ -32,9 +32,13 @@
                     {
                         <p class="text-muted small mb-2">@Model.Template.Description</p>
                     }
+                    <div class="small border-top pt-2 mb-1">
+                        <span class="fw-semibold text-muted">Trigger:</span>
+                        @Html.Raw(TriggerBadge(Model.Template.TriggerType))
+                    </div>
                     @if (Model.Template.Steps.Count > 0)
                     {
-                        <div class="small border-top pt-2">
+                        <div class="small">
                             <span class="fw-semibold text-muted">Steps:</span>
                             @foreach (var step in Model.Template.Steps.OrderBy(s => s.Order))
                             {
@@ -87,7 +91,7 @@
                         </div>
 
                         <p class="text-muted small mb-0">
-                            Trigger type and step configuration can be edited after creation.
+                            Trigger and step configuration from the template will be pre-populated. You can edit them after creation.
                         </p>
 
                         <div class="d-flex gap-2 mt-3">
@@ -103,6 +107,14 @@
 </div>
 
 @functions {
+    static string TriggerBadge(string? triggerType) => triggerType switch
+    {
+        "Webhook"  => "<span class=\"badge bg-info text-dark\">Webhook</span>",
+        "Manual"   => "<span class=\"badge bg-secondary\">Manual</span>",
+        "Schedule" => "<span class=\"badge bg-warning text-dark\">Schedule</span>",
+        _          => "<span class=\"badge bg-light text-dark border\">Unknown</span>"
+    };
+
     static string StepTypeLabel(string stepType) => stepType switch
     {
         "HttpRequest" or "HttpActivityHandler" => "HTTP",

@@ -1,8 +1,11 @@
+using StepTrail.Shared.Definitions;
+
 namespace StepTrail.Shared.Workflows;
 
 /// <summary>
-/// Base class for code-first workflow definitions.
-/// Inherit from this class to register a workflow with the system.
+/// Base class for code-first workflow definitions (templates).
+/// Inherit from this class to register a workflow blueprint with the system.
+/// A template defines a complete workflow: trigger type + ordered steps.
 /// </summary>
 public abstract class WorkflowDescriptor
 {
@@ -22,6 +25,11 @@ public abstract class WorkflowDescriptor
     public abstract string Name { get; }
 
     public virtual string? Description => null;
+
+    /// <summary>
+    /// The trigger type for this workflow template. Defaults to Webhook.
+    /// </summary>
+    public virtual TriggerType TriggerType => TriggerType.Webhook;
 
     /// <summary>
     /// When set, the recurring scheduler creates a new workflow instance every N seconds.

@@ -537,6 +537,7 @@ public sealed class WorkflowDescriptorSummary
     public int Version { get; init; }
     public string Name { get; init; } = string.Empty;
     public string? Description { get; init; }
+    public string? TriggerType { get; init; }
     public int? RecurrenceIntervalSeconds { get; init; }
     public IReadOnlyList<WorkflowDescriptorStepSummary> Steps { get; init; } = [];
 }

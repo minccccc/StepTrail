@@ -33,7 +33,7 @@ public sealed class DevDataSeedService : IHostedService
         var db = scope.ServiceProvider.GetRequiredService<StepTrailDbContext>();
         var repository = scope.ServiceProvider.GetRequiredService<IWorkflowDefinitionRepository>();
 
-        if (await db.WorkflowInstances.AnyAsync(i => i.ExternalKey == "seed-forward-ok", ct))
+        if (await db.WorkflowInstances.AnyAsync(i => i.ExternalKey == "forward-ok", ct))
         {
             _logger.LogDebug("Dev seed data already present — skipping");
             return;
@@ -41,8 +41,8 @@ public sealed class DevDataSeedService : IHostedService
 
         // ── Create and activate workflow definitions from templates ──────────────
         var forwardDef = await CreateAndActivateAsync(repository,
-            "seed-forward", "Seed: Webhook Forward",
-            TriggerDefinition.CreateWebhook(Guid.NewGuid(), new WebhookTriggerConfiguration("seed-forward")),
+            "forward", "Webhook Forward",
+            TriggerDefinition.CreateWebhook(Guid.NewGuid(), new WebhookTriggerConfiguration("forward")),
             [
                 StepDefinition.CreateTransform(Guid.NewGuid(), "transform-input", 1,
                     new TransformStepConfiguration([
@@ -53,11 +53,13 @@ public sealed class DevDataSeedService : IHostedService
                     new HttpRequestStepConfiguration("https://httpbin.org/post", "POST"),
                     retryPolicy: new RetryPolicy(3, 15, BackoffStrategy.Fixed))
             ],
-            "webhook-transform-forward", ct);
+            "webhook-transform-forward",
+            "Receives a webhook, normalizes the payload, and forwards it to a downstream HTTP endpoint. Retries automatically on failure.",
+            ct);
 
         var chainDef = await CreateAndActivateAsync(repository,
-            "seed-api-chain", "Seed: API Chain",
-            TriggerDefinition.CreateWebhook(Guid.NewGuid(), new WebhookTriggerConfiguration("seed-api-chain")),
+            "api-chain", "API Chain",
+            TriggerDefinition.CreateWebhook(Guid.NewGuid(), new WebhookTriggerConfiguration("api-chain")),
             [
                 StepDefinition.CreateTransform(Guid.NewGuid(), "transform-for-api-a", 1,
                     new TransformStepConfiguration([
@@ -76,39 +78,41 @@ public sealed class DevDataSeedService : IHostedService
                     new HttpRequestStepConfiguration("https://httpbin.org/post", "POST"),
                     retryPolicy: new RetryPolicy(3, 15, BackoffStrategy.Fixed))
             ],
-            "webhook-api-chain", ct);
+            "webhook-api-chain",
+            "Receives a webhook, transforms the payload, calls API A, transforms the result, then calls API B. Failure in later steps can be retried without re-running earlier completed steps.",
+            ct);
 
         // Read back persisted records to get the DB-mapped IDs for step definitions
         var forwardRecord = await db.ExecutableWorkflowDefinitions
             .Include(d => d.StepDefinitions.OrderBy(s => s.Order))
-            .FirstAsync(d => d.Key == "seed-forward", ct);
+            .FirstAsync(d => d.Key == "forward", ct);
 
         var chainRecord = await db.ExecutableWorkflowDefinitions
             .Include(d => d.StepDefinitions.OrderBy(s => s.Order))
-            .FirstAsync(d => d.Key == "seed-api-chain", ct);
+            .FirstAsync(d => d.Key == "api-chain", ct);
 
         // ── Create instances for the forward workflow ────────────────────────────
         var now = DateTimeOffset.UtcNow;
 
-        SeedCompletedInstance(db, forwardRecord, now.AddHours(-2), "seed-forward-ok",
+        SeedCompletedInstance(db, forwardRecord, now.AddHours(-2), "forward-ok",
             """{"type":"order.created","data":{"orderId":1001}}""");
 
-        SeedFailedInstance(db, forwardRecord, now.AddHours(-1), "seed-forward-fail",
+        SeedFailedInstance(db, forwardRecord, now.AddHours(-1), "forward-fail",
             """{"type":"user.deleted","data":{"userId":42}}""",
             "Connection refused: https://httpbin.org/post");
 
-        SeedPendingInstance(db, forwardRecord, now.AddSeconds(-10), "seed-forward-pending",
+        SeedPendingInstance(db, forwardRecord, now.AddSeconds(-10), "forward-pending",
             """{"type":"invoice.sent","data":{"invoiceId":789}}""");
 
         // ── Create instances for the chain workflow ──────────────────────────────
-        SeedCompletedInstance(db, chainRecord, now.AddHours(-3), "seed-chain-ok",
+        SeedCompletedInstance(db, chainRecord, now.AddHours(-3), "chain-ok",
             """{"id":"req-001","action":"sync","payload":{"customerId":"cust-42"}}""");
 
-        SeedPartialFailureInstance(db, chainRecord, now.AddMinutes(-30), "seed-chain-partial",
+        SeedPartialFailureInstance(db, chainRecord, now.AddMinutes(-30), "chain-partial",
             """{"id":"req-002","action":"process","payload":{"customerId":"cust-99"}}""",
             "HTTP 502 Bad Gateway from https://httpbin.org/post");
 
-        SeedRunningInstance(db, chainRecord, now.AddMinutes(-2), "seed-chain-running",
+        SeedRunningInstance(db, chainRecord, now.AddMinutes(-2), "chain-running",
             """{"id":"req-003","action":"validate","payload":{"customerId":"cust-55"}}""");
 
         await db.SaveChangesAsync(ct);
@@ -125,6 +129,7 @@ public sealed class DevDataSeedService : IHostedService
         TriggerDefinition trigger,
         List<StepDefinition> steps,
         string sourceTemplateKey,
+        string? description,
         CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;
@@ -132,7 +137,7 @@ public sealed class DevDataSeedService : IHostedService
         var definition = new StepTrail.Shared.Definitions.WorkflowDefinition(
             Guid.NewGuid(), key, name, 1,
             WorkflowDefinitionStatus.Inactive, trigger, steps, now, now,
-            $"Dev seed — created from '{sourceTemplateKey}' template.",
+            description,
             sourceTemplateKey: sourceTemplateKey, sourceTemplateVersion: 1);
 
         await repository.SaveNewVersionAsync(definition, ct);

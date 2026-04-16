@@ -1,3 +1,4 @@
+using StepTrail.Shared.Definitions;
 using StepTrail.Shared.Workflows;
 
 namespace StepTrail.Api.Workflows;
@@ -24,7 +25,7 @@ public sealed class ScheduledHttpCheckAlertWorkflow : WorkflowDescriptor
         "evaluates the response, and sends an alert webhook if the check fails. " +
         "A simple operational monitoring pattern — no webhook trigger needed.";
 
-    public override int? RecurrenceIntervalSeconds => 300;
+    public override TriggerType TriggerType => TriggerType.Schedule;
 
     public override IReadOnlyList<WorkflowStepDescriptor> Steps =>
     [

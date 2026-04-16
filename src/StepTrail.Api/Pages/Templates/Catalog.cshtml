@@ -37,6 +37,7 @@ else
                 <div>
                     <span class="fw-semibold fs-5">@template.Name</span>
                     <span class="badge bg-light text-dark border ms-2">v@template.Version</span>
+                    @Html.Raw(TriggerBadge(template.TriggerType))
                     <span class="badge bg-light text-muted border ms-1">@template.Steps.Count step(s)</span>
                     @if (template.RecurrenceIntervalSeconds.HasValue)
                     {
@@ -56,10 +57,6 @@ else
                 {
                     <p class="text-muted mb-3">@template.Description</p>
                 }
-
-                <p class="text-muted small fw-semibold mb-2">
-                    Trigger type is chosen when you use this template.
-                </p>
 
                 @if (template.Steps.Count > 0)
                 {
@@ -107,6 +104,14 @@ else
 }
 
 @functions {
+    static string TriggerBadge(string? triggerType) => triggerType switch
+    {
+        "Webhook"  => "<span class=\"badge bg-info text-dark\">Webhook</span>",
+        "Manual"   => "<span class=\"badge bg-secondary\">Manual</span>",
+        "Schedule" => "<span class=\"badge bg-warning text-dark\">Schedule</span>",
+        _          => "<span class=\"badge bg-light text-dark border\">Unknown</span>"
+    };
+
     static string StepTypeBadge(string stepType)
     {
         var (label, css) = stepType switch

@@ -277,6 +277,7 @@ ops.MapGet("/workflows", (IWorkflowRegistry registry) =>
         w.Version,
         w.Name,
         w.Description,
+        TriggerType = w.TriggerType.ToString(),
         w.RecurrenceIntervalSeconds,
         Steps = w.Steps
             .OrderBy(s => s.Order)
@@ -347,15 +348,19 @@ ops.MapPost("/workflow-definitions/from-descriptor", async (
         return Results.BadRequest(new { error = "Key is required." });
     if (!IsValidWorkflowKey(request.Key.Trim()))
         return Results.BadRequest(new { error = "Key must contain only lowercase letters, numbers, and hyphens." });
-    if (!Enum.TryParse<TriggerType>(
-            string.IsNullOrWhiteSpace(request.TriggerType) ? "Webhook" : request.TriggerType,
-            ignoreCase: true, out var triggerType))
-        return Results.BadRequest(new { error = $"Invalid trigger type '{request.TriggerType}'." });
 
     var descriptor = registry.Find(request.DescriptorKey, request.DescriptorVersion)
                     ?? registry.FindLatest(request.DescriptorKey);
     if (descriptor is null)
         return Results.NotFound(new { error = $"Template descriptor '{request.DescriptorKey}' not found." });
+
+    // Use template's trigger type, allow explicit override via request
+    if (!Enum.TryParse<TriggerType>(
+            string.IsNullOrWhiteSpace(request.TriggerType)
+                ? descriptor.TriggerType.ToString()
+                : request.TriggerType,
+            ignoreCase: true, out var triggerType))
+        return Results.BadRequest(new { error = $"Invalid trigger type '{request.TriggerType}'." });
 
     var now = DateTimeOffset.UtcNow;
 
@@ -390,7 +395,7 @@ ops.MapPost("/workflow-definitions/from-descriptor", async (
     var definition = new StepTrail.Shared.Definitions.WorkflowDefinition(
         Guid.NewGuid(), request.Key.Trim(), request.Name.Trim(), 1,
         WorkflowDefinitionStatus.Inactive, trigger, steps, now, now,
-        $"Created from template '{descriptor.Key}' v{descriptor.Version}.",
+        descriptor.Description,
         sourceTemplateKey: descriptor.Key,
         sourceTemplateVersion: descriptor.Version);
 
