@@ -5,23 +5,23 @@
     ViewData["Title"] = Model.Instance is null ? "Instance Not Found" : $"Instance {Model.Id.ToString()[..8]}...";
     var inst = Model.Instance;
     var trail = Model.Trail;
-    bool isArchived = inst?.Status == "Archived";
     bool canRetry = inst?.CanRetry ?? false;
     bool canReplay = inst?.CanReplay ?? false;
     bool canCancel = inst?.CanCancel ?? false;
     bool canArchive = inst?.CanArchive ?? false;
+    bool isArchived = inst?.Status == "Archived";
 
     var totalSteps = trail?.Steps.Count ?? 0;
     var completedSteps = trail?.Steps.Count(step => step.LatestStatus == "Completed") ?? 0;
     var activeSteps = trail?.Steps.Count(step => step.LatestStatus is "Running" or "Waiting" or "Pending") ?? 0;
     var failedSteps = trail?.Steps.Count(step => step.LatestStatus == "Failed") ?? 0;
     var retriedSteps = trail?.Steps.Count(step => step.Attempts.Count > 1) ?? 0;
-    var totalRuns = trail?.Steps.Sum(step => step.Attempts.Count) ?? 0;
     var focusStep = ResolveFocusStep(trail, inst?.Status);
+    var focusAttempt = focusStep is null || focusStep.Attempts.Count == 0 ? null : focusStep.Attempts[^1];
 }
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
-        integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+        integrity="sha384-YvpcrYf0tY3lHB60NNkmXc4s9bIOgUxi8T/jzmK0xNnfkEbw9tGJKh7AqFHQS"
         crossorigin="anonymous"></script>
 
 @functions {
@@ -63,60 +63,44 @@
         "Webhook" => "<span class=\"badge bg-info text-dark\">Webhook</span>",
         "Manual" => "<span class=\"badge bg-secondary\">Manual</span>",
         "Schedule" => "<span class=\"badge bg-warning text-dark\">Schedule</span>",
-        null => "<span class=\"text-muted\">-</span>",
-        _ => $"<span class=\"badge bg-light text-dark\">{triggerType}</span>"
+        _ => "<span class=\"text-muted\">-</span>"
     };
 
     static string Truncate(string text, int max) =>
         text.Length <= max ? text : text[..max] + "...";
 
-    static string FormatDuration(TimeSpan duration)
+    static string FormatDuration(TimeSpan d)
     {
-        if (duration.TotalSeconds < 1)
+        if (d.TotalSeconds < 1) return $"{d.TotalMilliseconds:F0}ms";
+        if (d.TotalMinutes < 1) return $"{d.TotalSeconds:F1}s";
+        if (d.TotalHours < 1)
         {
-            return $"{duration.TotalMilliseconds:F0}ms";
+            var sec = d.Seconds;
+            return sec > 0 ? $"{(int)d.TotalMinutes}m {sec}s" : $"{(int)d.TotalMinutes}m";
         }
-
-        if (duration.TotalMinutes < 1)
-        {
-            return $"{duration.TotalSeconds:F1}s";
-        }
-
-        if (duration.TotalHours < 1)
-        {
-            return $"{duration.TotalMinutes:F1}m";
-        }
-
-        return $"{duration.TotalHours:F1}h";
+        var min = d.Minutes;
+        return min > 0 ? $"{(int)d.TotalHours}h {min}m" : $"{(int)d.TotalHours}h";
     }
 
-    static string FormatTimestamp(DateTimeOffset value) =>
-        value.ToString("yyyy-MM-dd HH:mm:ss zzz");
+    static string FormatUtc(DateTimeOffset value) =>
+        value.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss 'UTC'");
 
     static string AttemptDuration(TrailStepAttempt attempt)
     {
-        if (!attempt.StartedAt.HasValue)
-        {
-            return "Not started";
-        }
-
-        if (!attempt.CompletedAt.HasValue)
-        {
-            return "Still running";
-        }
-
+        if (!attempt.StartedAt.HasValue) return "Not started";
+        if (!attempt.CompletedAt.HasValue) return "Still running";
         return FormatDuration(attempt.CompletedAt.Value - attempt.StartedAt.Value);
     }
 
-    static TrailStepAttempt? GetLatestAttempt(TrailStep step) =>
-        step.Attempts.Count == 0 ? null : step.Attempts[^1];
+    static string AttemptDurationShort(TrailStepAttempt attempt)
+    {
+        if (!attempt.StartedAt.HasValue || !attempt.CompletedAt.HasValue) return "-";
+        return FormatDuration(attempt.CompletedAt.Value - attempt.StartedAt.Value);
+    }
 
     static TrailStep? ResolveFocusStep(WorkflowTrail? trail, string? workflowStatus)
     {
-        if (trail is null || trail.Steps.Count == 0)
-        {
-            return null;
-        }
+        if (trail is null || trail.Steps.Count == 0) return null;
 
         if (workflowStatus is "Failed" or "AwaitingRetry")
         {
@@ -132,479 +116,245 @@
                 ?? trail.Steps[^1];
         }
 
-        return trail.Steps.LastOrDefault(step => step.LatestStatus is not "Completed" and not "Cancelled")
+        return trail.Steps.LastOrDefault(step => step.Attempts.Count > 1)
             ?? trail.Steps[^1];
     }
 
-    static string FocusHeading(string workflowStatus, TrailStep step) =>
-        step.LatestStatus switch
-        {
-            "Failed" => "Needs attention now",
-            "Running" => "Currently executing",
-            "Waiting" => "Waiting to resume",
-            "Pending" => "Queued next",
-            _ when workflowStatus == "Completed" => "Completed latest step",
-            _ => "Latest significant step"
-        };
-
-    static int DisplayStepIndex(TrailStep step) => step.StepOrder > 0 ? step.StepOrder : 0;
-
-    static string StepAnchorId(string stepKey)
+    static string FocusHeading(string workflowStatus, TrailStep step) => step.LatestStatus switch
     {
-        var normalized = new string(stepKey
-            .Select(ch => char.IsLetterOrDigit(ch) ? char.ToLowerInvariant(ch) : '-')
-            .ToArray());
+        "Failed" => "Needs attention",
+        "Running" => "Current active step",
+        "Waiting" => "Current waiting step",
+        "Pending" => "Queued next",
+        _ when workflowStatus == "Completed" => "Most recent completed step",
+        _ => "Most relevant step"
+    };
 
-        return $"step-{normalized}";
-    }
-
-    static bool HasRepeatedRecordedAttempts(TrailStep step) =>
-        step.Attempts.Select(attempt => attempt.Attempt).Distinct().Count() != step.Attempts.Count;
-
-    static string DescribeLatestMoment(TrailStep step, TrailStepAttempt? latestAttempt)
-    {
-        if (step.NextRetryAt.HasValue)
-        {
-            return $"Retry queued for {FormatTimestamp(step.NextRetryAt.Value)}";
-        }
-
-        if (step.WaitingUntil.HasValue)
-        {
-            return $"Waiting until {FormatTimestamp(step.WaitingUntil.Value)}";
-        }
-
-        if (latestAttempt is null)
-        {
-            return "No execution recorded yet";
-        }
-
-        if (latestAttempt.CompletedAt.HasValue)
-        {
-            return $"Last update at {FormatTimestamp(latestAttempt.CompletedAt.Value)}";
-        }
-
-        if (latestAttempt.StartedAt.HasValue)
-        {
-            return $"Started at {FormatTimestamp(latestAttempt.StartedAt.Value)}";
-        }
-
-        return $"Scheduled at {FormatTimestamp(latestAttempt.ScheduledAt)}";
-    }
-
-    static string DescribeStepSummary(TrailStep step, TrailStepAttempt? latestAttempt)
-    {
-        var summaryParts = new List<string>
-        {
-            $"{step.Attempts.Count} run{(step.Attempts.Count == 1 ? string.Empty : "s")}"
-        };
-
-        if (latestAttempt is not null)
-        {
-            summaryParts.Add($"latest duration: {AttemptDuration(latestAttempt)}");
-        }
-
-        if (step.NextRetryAt.HasValue)
-        {
-            summaryParts.Add($"retry at {FormatTimestamp(step.NextRetryAt.Value)}");
-        }
-        else if (step.WaitingUntil.HasValue)
-        {
-            summaryParts.Add($"waiting until {FormatTimestamp(step.WaitingUntil.Value)}");
-        }
-        else if (latestAttempt?.CompletedAt.HasValue == true)
-        {
-            summaryParts.Add($"completed at {FormatTimestamp(latestAttempt.CompletedAt.Value)}");
-        }
-        else if (latestAttempt?.StartedAt.HasValue == true)
-        {
-            summaryParts.Add($"started at {FormatTimestamp(latestAttempt.StartedAt.Value)}");
-        }
-        else if (latestAttempt is not null)
-        {
-            summaryParts.Add($"scheduled at {FormatTimestamp(latestAttempt.ScheduledAt)}");
-        }
-
-        return string.Join(" | ", summaryParts);
-    }
-
-    static string StatusSurfaceClass(string status) => status switch
+    static string FocusPanelClass(string status) => status switch
     {
         "Failed" => "is-failed",
-        "Running" => "is-running",
+        "Running" => "is-active",
+        "Pending" => "is-active",
         "Waiting" => "is-waiting",
-        "Pending" => "is-pending",
         _ => string.Empty
     };
+
+    static string StepShellClass(bool isFailed, bool isActive, bool hasRetries)
+    {
+        var classes = new List<string>();
+        if (isFailed) classes.Add("is-failed");
+        if (isActive) classes.Add("is-active");
+        if (hasRetries) classes.Add("is-retried");
+        return string.Join(" ", classes);
+    }
+
+    static string PrettyJson(string json)
+    {
+        try
+        {
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+            return System.Text.Json.JsonSerializer.Serialize(
+                doc,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        }
+        catch
+        {
+            return json;
+        }
+    }
 }
 
 <style>
-    .step-trail-card {
-        border: 0;
-        overflow: hidden;
-    }
-
-    .trail-summary-grid {
+    .trail-overview {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
         gap: .75rem;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
     }
 
-    .trail-summary-tile {
-        background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-        border: 1px solid #e2e8f0;
-        border-radius: 1rem;
-        padding: 1rem;
-        box-shadow: 0 .4rem 1rem rgba(15, 23, 42, .04);
+    .trail-stat {
+        background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
+        border: 1px solid #dfe5ec;
+        border-radius: .9rem;
+        box-shadow: 0 .35rem .9rem rgba(15, 23, 42, .04);
+        padding: .85rem .95rem;
     }
 
-    .trail-summary-label {
-        color: #6c757d;
+    .trail-stat-label {
+        color: #64748b;
         display: block;
         font-size: .72rem;
         font-weight: 700;
         letter-spacing: .08em;
-        margin-bottom: .35rem;
+        margin-bottom: .25rem;
         text-transform: uppercase;
     }
 
-    .trail-summary-value {
-        color: #111827;
-        font-size: 1.65rem;
-        font-weight: 700;
-        line-height: 1;
-    }
-
-    .trail-summary-note {
-        color: #6c757d;
+    .trail-stat-value {
+        color: #0f172a;
         display: block;
-        font-size: .82rem;
-        margin-top: .35rem;
+        font-size: 1.45rem;
+        font-weight: 700;
+        line-height: 1.1;
     }
 
-    .trail-focus-card {
-        background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-        border: 1px solid #dbe4ee;
+    .trail-focus {
+        background: #fff;
+        border: 1px solid #dfe5ec;
         border-radius: 1rem;
-        box-shadow: 0 .65rem 1.5rem rgba(15, 23, 42, .06);
-        padding: 1.1rem 1.2rem;
+        box-shadow: 0 .45rem 1rem rgba(15, 23, 42, .05);
+        padding: 1rem 1.1rem;
     }
 
-    .trail-focus-card.is-failed {
+    .trail-focus.is-failed {
         background: linear-gradient(180deg, #fff8f8 0%, #fff2f2 100%);
         border-color: #f1aeb5;
     }
 
-    .trail-focus-card.is-running {
-        background: linear-gradient(180deg, #f5f9ff 0%, #eef6ff 100%);
+    .trail-focus.is-active {
+        background: linear-gradient(180deg, #f8fbff 0%, #f2f7ff 100%);
         border-color: #9ec5fe;
     }
 
-    .trail-focus-card.is-waiting {
-        background: linear-gradient(180deg, #f2fcff 0%, #ecfbff 100%);
+    .trail-focus.is-waiting {
+        background: linear-gradient(180deg, #f6fcff 0%, #eefbff 100%);
         border-color: #9eeaf9;
     }
 
-    .trail-focus-card.is-pending {
-        background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
-        border-color: #cbd5e1;
-    }
-
-    .trail-kicker {
-        color: #6c757d;
-        font-size: .78rem;
+    .trail-focus-kicker {
+        color: #64748b;
+        font-size: .74rem;
         font-weight: 700;
         letter-spacing: .08em;
-        margin-bottom: .35rem;
+        margin-bottom: .25rem;
         text-transform: uppercase;
     }
 
-    .trail-meta-line {
+    .trail-subtitle {
+        color: #6c757d;
+        font-size: .92rem;
+    }
+
+    .step-row {
+        position: relative;
+        padding-left: 2.8rem;
+        padding-bottom: .55rem;
+    }
+
+    .step-row::before {
+        background: #d7dee7;
+        bottom: -.1rem;
+        content: "";
+        left: .95rem;
+        position: absolute;
+        top: 2rem;
+        width: 2px;
+    }
+
+    .step-row:last-child::before {
+        display: none;
+    }
+
+    .step-icon {
+        align-items: center;
+        border-radius: 999px;
+        color: #fff;
+        display: flex;
+        font-size: .78rem;
+        font-weight: 700;
+        height: 1.95rem;
+        justify-content: center;
+        left: 0;
+        position: absolute;
+        top: .45rem;
+        width: 1.95rem;
+        z-index: 1;
+    }
+
+    .step-icon.ok { background: #198754; }
+    .step-icon.err { background: #dc3545; }
+    .step-icon.run { background: #0d6efd; }
+    .step-icon.wait { background: #6c757d; }
+
+    .step-shell {
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: .95rem;
+        box-shadow: 0 .25rem .8rem rgba(15, 23, 42, .04);
+        padding: .95rem 1rem;
+    }
+
+    .step-shell.is-failed {
+        border-color: #f1aeb5;
+        box-shadow: 0 .3rem .95rem rgba(220, 53, 69, .08);
+    }
+
+    .step-shell.is-active { border-color: #9ec5fe; }
+    .step-shell.is-retried { border-color: #ffe69c; }
+
+    .step-meta {
+        color: #6c757d;
         display: flex;
         flex-wrap: wrap;
-        gap: .45rem .9rem;
+        gap: .35rem 1rem;
+        margin-top: .45rem;
     }
 
-    .trail-meta-line span {
-        white-space: nowrap;
+    .step-meta span { white-space: nowrap; }
+
+    .step-signals {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .4rem;
+        margin-top: .55rem;
     }
 
-    .trail-error-panel {
-        background: #1f2937;
-        border-radius: .85rem;
-        color: #f9fafb;
+    .signal-pill {
+        border-radius: 999px;
+        display: inline-flex;
+        font-size: .76rem;
+        font-weight: 600;
+        padding: .2rem .6rem;
+    }
+
+    .signal-pill.retry { background: #fff3cd; color: #7a5a00; }
+    .signal-pill.wait { background: #cff4fc; color: #055160; }
+
+    .err-box {
+        background: #fff5f5;
+        border: 1px solid #f5c6cb;
+        border-radius: .6rem;
+        color: #842029;
         font-family: var(--bs-font-monospace);
-        font-size: .86rem;
-        margin-top: .85rem;
-        padding: .85rem 1rem;
+        font-size: .82rem;
+        margin-top: .7rem;
+        padding: .7rem .8rem;
         white-space: pre-wrap;
         word-break: break-word;
     }
 
-    .trail-rail {
-        display: grid;
-        gap: .75rem;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    .data-box {
+        background: #1e1e1e;
+        border-radius: .6rem;
+        color: #d4d4d4;
+        font-size: .79rem;
+        max-height: 220px;
+        overflow-y: auto;
+        padding: .7rem .8rem;
+        white-space: pre-wrap;
+        word-break: break-word;
     }
 
-    .trail-rail-item {
-        align-items: flex-start;
-        background: #fff;
-        border: 1px solid #e2e8f0;
-        border-radius: 1rem;
-        box-shadow: 0 .35rem 1rem rgba(15, 23, 42, .04);
-        color: inherit;
-        display: flex;
-        gap: .85rem;
-        min-height: 102px;
-        padding: .9rem;
-        text-decoration: none;
-        transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
-    }
-
-    .trail-rail-item:hover {
-        border-color: #b6c2cf;
-        box-shadow: 0 .6rem 1.25rem rgba(15, 23, 42, .08);
-        transform: translateY(-1px);
-    }
-
-    .trail-rail-item.is-focus {
-        box-shadow: 0 0 0 .2rem rgba(13, 110, 253, .08);
-    }
-
-    .trail-rail-item.is-failed {
-        border-color: #f1aeb5;
-    }
-
-    .trail-rail-item.is-running {
-        border-color: #9ec5fe;
-    }
-
-    .trail-rail-item.is-waiting {
-        border-color: #9eeaf9;
-    }
-
-    .trail-rail-index {
-        align-items: center;
-        background: #e9ecef;
-        border-radius: 999px;
-        color: #495057;
-        display: inline-flex;
-        flex-shrink: 0;
-        font-size: .9rem;
-        font-weight: 700;
-        height: 2rem;
-        justify-content: center;
-        width: 2rem;
-    }
-
-    .trail-rail-item.is-failed .trail-rail-index {
-        background: #dc3545;
-        color: #fff;
-    }
-
-    .trail-rail-item.is-running .trail-rail-index {
-        background: #0d6efd;
-        color: #fff;
-    }
-
-    .trail-rail-item.is-waiting .trail-rail-index {
-        background: #0dcaf0;
-        color: #073b4c;
-    }
-
-    .trail-rail-item.is-pending .trail-rail-index {
-        background: #6c757d;
-        color: #fff;
-    }
-
-    .trail-rail-body {
-        min-width: 0;
-    }
-
-    .trail-rail-title {
-        display: block;
-        font-weight: 600;
-        margin-bottom: .15rem;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .trail-rail-caption {
-        color: #6c757d;
-        display: block;
-        font-size: .82rem;
-        margin-top: .35rem;
-    }
-
-    .trail-accordion {
-        display: grid;
-        gap: .85rem;
-    }
-
-    .trail-accordion .accordion-item {
-        border: 1px solid #dbe4ee;
-        border-radius: 1rem;
-        overflow: hidden;
-    }
-
-    .trail-accordion .accordion-button {
-        background: #fff;
-        box-shadow: none;
-        padding: 1rem 1.15rem;
-    }
-
-    .trail-accordion .accordion-button:not(.collapsed) {
-        background: #f8fafc;
-        box-shadow: none;
-        color: inherit;
-    }
-
-    .trail-accordion .accordion-button:focus {
-        border-color: transparent;
-        box-shadow: 0 0 0 .2rem rgba(13, 110, 253, .08);
-    }
-
-    .trail-step-item.is-failed {
-        border-color: #f1aeb5;
-    }
-
-    .trail-step-item.is-running {
-        border-color: #9ec5fe;
-    }
-
-    .trail-step-item.is-waiting {
-        border-color: #9eeaf9;
-    }
-
-    .trail-step-item.is-pending {
-        border-color: #cbd5e1;
-    }
-
-    .trail-step-number {
-        align-items: center;
-        background: #edf2f7;
-        border-radius: 999px;
-        color: #334155;
-        display: inline-flex;
-        font-size: .85rem;
-        font-weight: 700;
-        height: 1.85rem;
-        justify-content: center;
-        width: 1.85rem;
-    }
-
-    .trail-inline-error {
-        background: #fff3f3;
-        border: 1px solid #f1aeb5;
-        border-radius: .75rem;
-        color: #842029;
-        margin-top: .65rem;
-        padding: .55rem .75rem;
-    }
-
-    .trail-caption {
-        color: #6c757d;
-        font-size: .82rem;
-    }
-
-    .trail-detail-card {
-        background: #fff;
-        border: 1px solid #e2e8f0;
-        border-radius: 1rem;
-        height: 100%;
-        padding: 1rem;
-    }
-
-    .trail-detail-title {
-        color: #6c757d;
-        font-size: .75rem;
-        font-weight: 700;
-        letter-spacing: .08em;
-        margin-bottom: .75rem;
-        text-transform: uppercase;
-    }
-
-    .trail-detail-row + .trail-detail-row {
-        margin-top: .8rem;
-    }
-
-    .trail-detail-label {
-        color: #6c757d;
-        display: block;
-        font-size: .72rem;
-        font-weight: 600;
-        letter-spacing: .06em;
-        margin-bottom: .15rem;
-        text-transform: uppercase;
-    }
-
-    .trail-detail-value {
-        color: #111827;
-        font-weight: 600;
-    }
-
-    .trail-attempt-list {
-        display: grid;
-        gap: .75rem;
-    }
-
-    .trail-attempt-card {
-        background: #fff;
-        border: 1px solid #e2e8f0;
-        border-radius: 1rem;
-        padding: 1rem;
-    }
-
-    .trail-attempt-card.is-failed {
-        background: #fff6f6;
-        border-color: #f1aeb5;
-    }
-
-    .trail-attempt-card.is-running {
-        background: #f5f9ff;
-        border-color: #9ec5fe;
-    }
-
-    .trail-attempt-card.is-waiting {
-        background: #f2fcff;
-        border-color: #9eeaf9;
-    }
-
-    .trail-attempt-label {
-        color: #6c757d;
-        font-size: .78rem;
-        font-weight: 700;
-        letter-spacing: .08em;
-        text-transform: uppercase;
-    }
-
-    .trail-note {
+    .attempt-note {
         background: #f8fafc;
         border: 1px dashed #cbd5e1;
-        border-radius: .85rem;
-        color: #475569;
-        padding: .75rem .85rem;
-    }
-
-    .trail-card-subtitle {
-        color: #6c757d;
-        font-size: .88rem;
+        border-radius: .6rem;
+        color: #64748b;
+        padding: .55rem .7rem;
     }
 
     @@media (max-width: 767.98px) {
-        .trail-summary-grid,
-        .trail-rail {
-            grid-template-columns: 1fr;
-        }
-
-        .trail-meta-line span {
-            white-space: normal;
-        }
-
-        .trail-accordion .accordion-button {
-            padding: .95rem 1rem;
-        }
+        .trail-overview { grid-template-columns: 1fr 1fr; }
+        .step-meta span { white-space: normal; }
     }
 </style>
 
@@ -636,7 +386,7 @@
 }
 else if (inst is not null)
 {
-    <div class="d-flex align-items-center justify-content-between mb-4">
+    <div class="d-flex align-items-center justify-content-between mb-3">
         <div>
             <h1 class="h3 mb-1">
                 @inst.WorkflowKey
@@ -684,56 +434,57 @@ else if (inst is not null)
 
     <div class="row g-3 mb-4">
         <div class="col-md-6">
-            <div class="card h-100 shadow-sm">
-                <div class="card-header fw-semibold">General Information</div>
-                <div class="card-body">
+            <div class="card shadow-sm h-100">
+                <div class="card-header fw-semibold small py-2">General Information</div>
+                <div class="card-body py-2">
                     <dl class="row mb-0 small">
                         <dt class="col-sm-4 text-muted">Instance ID</dt>
                         <dd class="col-sm-8 font-monospace">@inst.Id</dd>
-
-                        <dt class="col-sm-4 text-muted">Trigger Type</dt>
-                        <dd class="col-sm-8">@Html.Raw(TriggerBadge(inst.TriggerType))</dd>
-
-                        <dt class="col-sm-4 text-muted">External Key</dt>
-                        <dd class="col-sm-8">@(inst.ExternalKey ?? "-")</dd>
-
-                        <dt class="col-sm-4 text-muted">Idempotency Key</dt>
-                        <dd class="col-sm-8">@(inst.IdempotencyKey ?? "-")</dd>
-
                         <dt class="col-sm-4 text-muted">Status</dt>
                         <dd class="col-sm-8">@Html.Raw(StatusBadge(inst.Status))</dd>
-
+                        <dt class="col-sm-4 text-muted">Trigger</dt>
+                        <dd class="col-sm-8">@Html.Raw(TriggerBadge(inst.TriggerType))</dd>
+                        <dt class="col-sm-4 text-muted">External Key</dt>
+                        <dd class="col-sm-8">@(inst.ExternalKey ?? "-")</dd>
+                        <dt class="col-sm-4 text-muted">Idempotency Key</dt>
+                        <dd class="col-sm-8">@(inst.IdempotencyKey ?? "-")</dd>
                         <dt class="col-sm-4 text-muted">Created At</dt>
-                        <dd class="col-sm-8">@FormatTimestamp(inst.CreatedAt)</dd>
-
+                        <dd class="col-sm-8">@FormatUtc(inst.CreatedAt)</dd>
                         <dt class="col-sm-4 text-muted">Updated At</dt>
-                        <dd class="col-sm-8">@FormatTimestamp(inst.UpdatedAt)</dd>
-
-                        <dt class="col-sm-4 text-muted">Completed At</dt>
-                        <dd class="col-sm-8">@(inst.CompletedAt is null ? "-" : FormatTimestamp(inst.CompletedAt.Value))</dd>
+                        <dd class="col-sm-8">@FormatUtc(inst.UpdatedAt)</dd>
+                        @if (inst.CompletedAt.HasValue)
+                        {
+                            <dt class="col-sm-4 text-muted">Completed At</dt>
+                            <dd class="col-sm-8">
+                                @FormatUtc(inst.CompletedAt.Value)
+                                <span class="text-muted ms-1">(@FormatDuration(inst.CompletedAt.Value - inst.CreatedAt))</span>
+                            </dd>
+                        }
                     </dl>
                 </div>
             </div>
         </div>
 
         <div class="col-md-6">
-            <div class="card h-100 shadow-sm">
-                <div class="card-header fw-semibold">Input / Trigger Data</div>
-                <div class="card-body">
+            <div class="card shadow-sm h-100">
+                <div class="card-header fw-semibold small py-2">Input / Trigger Data</div>
+                <div class="card-body py-2">
                     <p class="text-muted small mb-1 fw-semibold">Mapped Input</p>
                     @if (string.IsNullOrWhiteSpace(inst.Input))
                     {
-                        <p class="text-muted small fst-italic">No input.</p>
+                        <p class="text-muted small fst-italic mb-1">No input.</p>
                     }
                     else
                     {
-                        <pre class="json-block">@inst.Input</pre>
+                        <div class="data-box" style="min-height:200px">@PrettyJson(inst.Input)</div>
                     }
 
                     @if (!string.IsNullOrWhiteSpace(inst.TriggerData))
                     {
-                        <p class="text-muted small mb-1 fw-semibold mt-3">Raw Trigger Data</p>
-                        <pre class="json-block">@inst.TriggerData</pre>
+                        <details class="mt-2">
+                            <summary class="text-muted small fw-semibold" style="cursor:pointer">Raw Trigger Data</summary>
+                            <div class="data-box mt-1">@PrettyJson(inst.TriggerData)</div>
+                        </details>
                     }
                 </div>
             </div>
@@ -742,388 +493,267 @@ else if (inst is not null)
 
     @if (trail?.ReplayEvents.Count > 0)
     {
-        <div class="alert alert-info small mb-4">
+        <div class="alert alert-info small py-2 mb-3">
             @foreach (var replay in trail.ReplayEvents)
             {
-                <div>
-                    <strong>Replayed</strong> at @FormatTimestamp(replay.OccurredAt)
-                    @if (!string.IsNullOrWhiteSpace(replay.Payload))
-                    {
-                        <span class="text-muted ms-2">@Truncate(replay.Payload, 120)</span>
-                    }
-                </div>
+                <div>Replayed at @FormatUtc(replay.OccurredAt)</div>
             }
         </div>
     }
 
-    <div class="card shadow-sm step-trail-card">
-        <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <div>
-                <div class="fw-semibold">Step Trail</div>
-                <div class="trail-card-subtitle">Failure-first view of execution order, latest signal, and retry history.</div>
+    @if (trail is not null && trail.Steps.Count > 0)
+    {
+        <div class="trail-overview mb-3">
+            <div class="trail-stat">
+                <span class="trail-stat-label">Steps</span>
+                <span class="trail-stat-value">@totalSteps</span>
             </div>
-            @if (focusStep is not null)
-            {
-                <a href="#@StepAnchorId(focusStep.StepKey)" class="btn btn-outline-dark btn-sm">Jump to @focusStep.StepKey</a>
-            }
+            <div class="trail-stat">
+                <span class="trail-stat-label">Completed</span>
+                <span class="trail-stat-value">@completedSteps</span>
+            </div>
+            <div class="trail-stat">
+                <span class="trail-stat-label">In Flight</span>
+                <span class="trail-stat-value">@activeSteps</span>
+            </div>
+            <div class="trail-stat">
+                <span class="trail-stat-label">Failed</span>
+                <span class="trail-stat-value">@failedSteps</span>
+            </div>
+            <div class="trail-stat">
+                <span class="trail-stat-label">Retried</span>
+                <span class="trail-stat-value">@retriedSteps</span>
+            </div>
         </div>
-        <div class="card-body">
-            @if (trail is null || trail.Steps.Count == 0)
-            {
-                <p class="text-muted mb-0">No step executions recorded yet.</p>
-            }
-            else
-            {
-                <div class="trail-summary-grid mb-4">
-                    <div class="trail-summary-tile">
-                        <span class="trail-summary-label">Steps</span>
-                        <span class="trail-summary-value">@totalSteps</span>
-                        <span class="trail-summary-note">Ordered execution stages</span>
-                    </div>
-                    <div class="trail-summary-tile">
-                        <span class="trail-summary-label">Completed</span>
-                        <span class="trail-summary-value">@completedSteps</span>
-                        <span class="trail-summary-note">Finished successfully</span>
-                    </div>
-                    <div class="trail-summary-tile">
-                        <span class="trail-summary-label">In Flight</span>
-                        <span class="trail-summary-value">@activeSteps</span>
-                        <span class="trail-summary-note">Running, waiting, or pending</span>
-                    </div>
-                    <div class="trail-summary-tile">
-                        <span class="trail-summary-label">Failed</span>
-                        <span class="trail-summary-value">@failedSteps</span>
-                        <span class="trail-summary-note">Needs operator attention</span>
-                    </div>
-                    <div class="trail-summary-tile">
-                        <span class="trail-summary-label">Reruns</span>
-                        <span class="trail-summary-value">@retriedSteps</span>
-                        <span class="trail-summary-note">@($"{totalRuns} recorded executions total")</span>
-                    </div>
-                </div>
 
-                @if (focusStep is not null)
-                {
-                    var latestAttempt = GetLatestAttempt(focusStep);
-                    <div class="trail-focus-card @StatusSurfaceClass(focusStep.LatestStatus) mb-4">
-                        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
-                            <div>
-                                <div class="trail-kicker">@FocusHeading(inst.Status, focusStep)</div>
-                                <h2 class="h5 mb-1">@focusStep.StepKey</h2>
-                                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-                                    <span class="text-muted small">@(focusStep.StepType ?? "Unknown step type")</span>
-                                    @Html.Raw(StepStatusBadge(focusStep.LatestStatus))
-                                    @if (!string.IsNullOrWhiteSpace(focusStep.LatestFailureClassification))
-                                    {
-                                        @Html.Raw(ClassificationBadge(focusStep.LatestFailureClassification))
-                                    }
-                                    @if (focusStep.Attempts.Count > 1)
-                                    {
-                                        <span class="badge bg-light text-dark border">@focusStep.Attempts.Count runs</span>
-                                    }
-                                </div>
-                                @if (!string.IsNullOrWhiteSpace(focusStep.LatestError))
-                                {
-                                    <div class="trail-error-panel">@focusStep.LatestError</div>
-                                }
-                            </div>
-
-                            @if (latestAttempt is not null)
+        @if (focusStep is not null)
+        {
+            <div class="trail-focus @FocusPanelClass(focusStep.LatestStatus) mb-4">
+                <div class="trail-focus-kicker">@FocusHeading(inst.Status, focusStep)</div>
+                <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+                    <div>
+                        <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                            <span class="fw-semibold">@focusStep.StepKey</span>
+                            <span class="badge bg-light text-dark border">@focusStep.StepType</span>
+                            @Html.Raw(StepStatusBadge(focusStep.LatestStatus))
+                            @if (!string.IsNullOrWhiteSpace(focusStep.LatestFailureClassification))
                             {
-                                <div class="trail-caption">
-                                    <div><strong>Scheduled:</strong> @FormatTimestamp(latestAttempt.ScheduledAt)</div>
-                                    <div><strong>Started:</strong> @(latestAttempt.StartedAt is null ? "-" : FormatTimestamp(latestAttempt.StartedAt.Value))</div>
-                                    <div><strong>Completed:</strong> @(latestAttempt.CompletedAt is null ? "-" : FormatTimestamp(latestAttempt.CompletedAt.Value))</div>
-                                    <div><strong>Duration:</strong> @AttemptDuration(latestAttempt)</div>
-                                </div>
+                                @Html.Raw(ClassificationBadge(focusStep.LatestFailureClassification))
+                            }
+                            @if (focusStep.Attempts.Count > 1)
+                            {
+                                <span class="badge bg-warning text-dark">@($"{focusStep.Attempts.Count} runs")</span>
                             }
                         </div>
-
-                        @if (focusStep.WaitingUntil.HasValue || focusStep.NextRetryAt.HasValue || inst.Status == "AwaitingRetry")
-                        {
-                            <div class="trail-meta-line mt-3">
-                                @if (focusStep.WaitingUntil.HasValue)
-                                {
-                                    <span class="badge bg-info text-dark">Waiting until @FormatTimestamp(focusStep.WaitingUntil.Value)</span>
-                                }
-                                @if (focusStep.NextRetryAt.HasValue)
-                                {
-                                    <span class="badge bg-warning text-dark">Retry scheduled for @FormatTimestamp(focusStep.NextRetryAt.Value)</span>
-                                }
-                                @if (inst.Status == "AwaitingRetry")
-                                {
-                                    <span class="badge bg-warning text-dark">Workflow is waiting for a worker to pick up the retry</span>
-                                }
-                            </div>
-                        }
-
-                        @if (!string.IsNullOrWhiteSpace(focusStep.LatestInput))
-                        {
-                            <details class="mt-3">
-                                <summary class="small text-muted" style="cursor:pointer">Latest input</summary>
-                                <pre class="json-block mt-2">@focusStep.LatestInput</pre>
-                            </details>
-                        }
-
-                        @if (!string.IsNullOrWhiteSpace(focusStep.LatestOutput))
-                        {
-                            <details class="mt-3">
-                                <summary class="small text-muted" style="cursor:pointer">Latest output</summary>
-                                <pre class="json-block mt-2">@focusStep.LatestOutput</pre>
-                            </details>
-                        }
+                        <div class="trail-subtitle">This keeps the most relevant step visible immediately without making the full trail feel heavy.</div>
                     </div>
-                }
 
-                <div class="mb-4">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <div class="fw-semibold">Step Map</div>
-                        <div class="trail-caption">Compact status scan for large workflows</div>
-                    </div>
-                    <div class="trail-rail">
-                        @foreach (var step in trail.Steps)
-                        {
-                            var latestAttempt = GetLatestAttempt(step);
-                            var isFocus = step.StepKey == focusStep?.StepKey;
-                            <a href="#@StepAnchorId(step.StepKey)"
-                               class="trail-rail-item @StatusSurfaceClass(step.LatestStatus) @(isFocus ? "is-focus" : string.Empty)">
-                                <span class="trail-rail-index">@DisplayStepIndex(step)</span>
-                                <span class="trail-rail-body">
-                                    <span class="trail-rail-title">@step.StepKey</span>
-                                    <span class="text-muted small">@(step.StepType ?? "Unknown")</span>
-                                    <span class="d-flex flex-wrap gap-2 mt-2">
-                                        @Html.Raw(StepStatusBadge(step.LatestStatus))
-                                        @if (step.Attempts.Count > 1)
-                                        {
-                                            <span class="badge bg-light text-dark border">@($"{step.Attempts.Count} runs")</span>
-                                        }
-                                    </span>
-                                    <span class="trail-rail-caption">@DescribeLatestMoment(step, latestAttempt)</span>
-                                </span>
-                            </a>
-                        }
-                    </div>
-                </div>
-
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <div class="fw-semibold">Step Details</div>
-                    <div class="trail-caption">Problem steps open first. Completed steps stay quieter.</div>
-                </div>
-                <div class="accordion trail-accordion">
-                    @foreach (var step in trail.Steps)
+                    @if (focusAttempt is not null)
                     {
-                        var latestAttempt = GetLatestAttempt(step);
-                        var latestRunIndex = step.Attempts.Count;
-                        var expandByDefault = step.StepKey == focusStep?.StepKey ||
-                                              step.LatestStatus is "Failed" or "Running" or "Waiting";
-                        var collapseId = $"{StepAnchorId(step.StepKey)}-details";
-                        var hasRepeatedRecordedAttempts = HasRepeatedRecordedAttempts(step);
-
-                        <div id="@StepAnchorId(step.StepKey)" class="accordion-item trail-step-item @StatusSurfaceClass(step.LatestStatus)">
-                            <h2 class="accordion-header">
-                                <button class="accordion-button @(expandByDefault ? string.Empty : "collapsed")"
-                                        type="button"
-                                        data-bs-toggle="collapse"
-                                        data-bs-target="#@collapseId"
-                                        aria-expanded="@(expandByDefault ? "true" : "false")"
-                                        aria-controls="@collapseId">
-                                    <span class="w-100">
-                                        <span class="d-flex flex-wrap align-items-center gap-2">
-                                            <span class="trail-step-number">@DisplayStepIndex(step)</span>
-                                            <span class="fw-semibold">@step.StepKey</span>
-                                            <span class="text-muted small">@(step.StepType ?? "Unknown")</span>
-                                            @Html.Raw(StepStatusBadge(step.LatestStatus))
-                                            @if (!string.IsNullOrWhiteSpace(step.LatestFailureClassification))
-                                            {
-                                                @Html.Raw(ClassificationBadge(step.LatestFailureClassification))
-                                            }
-                                            @if (step.Attempts.Count > 1)
-                                            {
-                                                <span class="badge bg-light text-dark border">@($"{step.Attempts.Count} runs")</span>
-                                            }
-                                        </span>
-                                        <span class="trail-caption d-block mt-2">
-                                            @DescribeStepSummary(step, latestAttempt)
-                                        </span>
-                                        @if (!string.IsNullOrWhiteSpace(step.LatestError))
-                                        {
-                                            <span class="trail-inline-error d-block small">@Truncate(step.LatestError, 180)</span>
-                                        }
-                                    </span>
-                                </button>
-                            </h2>
-                            <div id="@collapseId" class="accordion-collapse collapse @(expandByDefault ? "show" : string.Empty)">
-                                <div class="accordion-body">
-                                    <div class="row g-3">
-                                        <div class="col-lg-4">
-                                            <div class="trail-detail-card">
-                                                <div class="trail-detail-title">Latest execution</div>
-                                                <div class="trail-detail-row">
-                                                    <span class="trail-detail-label">Status</span>
-                                                    <div class="trail-detail-value">@step.LatestStatus</div>
-                                                </div>
-                                                <div class="trail-detail-row">
-                                                    <span class="trail-detail-label">Most recent run</span>
-                                                    <div class="trail-detail-value">Run @latestRunIndex</div>
-                                                </div>
-                                                @if (latestAttempt is not null)
-                                                {
-                                                    <div class="trail-detail-row">
-                                                        <span class="trail-detail-label">Scheduled</span>
-                                                        <div class="trail-detail-value">@FormatTimestamp(latestAttempt.ScheduledAt)</div>
-                                                    </div>
-                                                    <div class="trail-detail-row">
-                                                        <span class="trail-detail-label">Started</span>
-                                                        <div class="trail-detail-value">@(latestAttempt.StartedAt is null ? "-" : FormatTimestamp(latestAttempt.StartedAt.Value))</div>
-                                                    </div>
-                                                    <div class="trail-detail-row">
-                                                        <span class="trail-detail-label">Completed</span>
-                                                        <div class="trail-detail-value">@(latestAttempt.CompletedAt is null ? "-" : FormatTimestamp(latestAttempt.CompletedAt.Value))</div>
-                                                    </div>
-                                                    <div class="trail-detail-row">
-                                                        <span class="trail-detail-label">Duration</span>
-                                                        <div class="trail-detail-value">@AttemptDuration(latestAttempt)</div>
-                                                    </div>
-                                                    <div class="trail-detail-row">
-                                                        <span class="trail-detail-label">Recorded attempt number</span>
-                                                        <div class="trail-detail-value">@latestAttempt.Attempt</div>
-                                                    </div>
-                                                }
-                                                @if (step.WaitingUntil.HasValue)
-                                                {
-                                                    <div class="trail-detail-row">
-                                                        <span class="trail-detail-label">Waiting until</span>
-                                                        <div class="trail-detail-value">@FormatTimestamp(step.WaitingUntil.Value)</div>
-                                                    </div>
-                                                }
-                                                @if (step.NextRetryAt.HasValue)
-                                                {
-                                                    <div class="trail-detail-row">
-                                                        <span class="trail-detail-label">Next retry</span>
-                                                        <div class="trail-detail-value">@FormatTimestamp(step.NextRetryAt.Value)</div>
-                                                    </div>
-                                                }
-                                            </div>
-                                        </div>
-
-                                        <div class="col-lg-8">
-                                            <div class="trail-detail-card">
-                                                <div class="trail-detail-title">Signal</div>
-                                                @if (!string.IsNullOrWhiteSpace(step.LatestInput))
-                                                {
-                                                    <div class="mb-3">
-                                                        <span class="trail-detail-label">Latest input</span>
-                                                        <pre class="json-block mt-2">@step.LatestInput</pre>
-                                                    </div>
-                                                }
-                                                else
-                                                {
-                                                    <div class="trail-note mb-3">No input snapshot captured for the latest run.</div>
-                                                }
-
-                                                @if (!string.IsNullOrWhiteSpace(step.LatestError))
-                                                {
-                                                    <div class="mb-3">
-                                                        <span class="trail-detail-label">Latest error</span>
-                                                        <div class="trail-error-panel mt-0">@step.LatestError</div>
-                                                    </div>
-                                                }
-                                                else
-                                                {
-                                                    <div class="trail-note mb-3">No error recorded for the latest run.</div>
-                                                }
-
-                                                @if (!string.IsNullOrWhiteSpace(step.LatestOutput))
-                                                {
-                                                    <div>
-                                                        <span class="trail-detail-label">Latest output</span>
-                                                        <pre class="json-block mt-2">@step.LatestOutput</pre>
-                                                    </div>
-                                                }
-                                                else
-                                                {
-                                                    <div class="trail-note">No output captured for the latest run.</div>
-                                                }
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div class="mt-4">
-                                        <div class="d-flex justify-content-between align-items-center mb-2">
-                                            <div class="fw-semibold">Execution history</div>
-                                            <div class="trail-caption">Chronological runs for this step</div>
-                                        </div>
-
-                                        @if (hasRepeatedRecordedAttempts)
-                                        {
-                                            <div class="trail-note small mb-3">
-                                                This step includes reruns where the stored attempt number repeats after a retry or replay.
-                                                The UI shows chronological run numbers so the history stays unambiguous.
-                                            </div>
-                                        }
-
-                                        <div class="trail-attempt-list">
-                                            @for (var runIndex = 0; runIndex < step.Attempts.Count; runIndex++)
-                                            {
-                                                var attempt = step.Attempts[runIndex];
-                                                var isLatestRun = runIndex == step.Attempts.Count - 1;
-
-                                                <div class="trail-attempt-card @StatusSurfaceClass(attempt.Status)">
-                                                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
-                                                        <div>
-                                                            <div class="d-flex flex-wrap align-items-center gap-2">
-                                                                <span class="trail-attempt-label">Run @(runIndex + 1)</span>
-                                                                @if (isLatestRun)
-                                                                {
-                                                                    <span class="badge bg-dark">Latest</span>
-                                                                }
-                                                                @Html.Raw(StepStatusBadge(attempt.Status))
-                                                                @if (!string.IsNullOrWhiteSpace(attempt.FailureClassification))
-                                                                {
-                                                                    @Html.Raw(ClassificationBadge(attempt.FailureClassification))
-                                                                }
-                                                            </div>
-
-                                                            <div class="trail-meta-line trail-caption mt-2">
-                                                                <span><strong>Recorded attempt:</strong> @attempt.Attempt</span>
-                                                                <span><strong>Scheduled:</strong> @FormatTimestamp(attempt.ScheduledAt)</span>
-                                                                <span><strong>Started:</strong> @(attempt.StartedAt is null ? "-" : FormatTimestamp(attempt.StartedAt.Value))</span>
-                                                                <span><strong>Completed:</strong> @(attempt.CompletedAt is null ? "-" : FormatTimestamp(attempt.CompletedAt.Value))</span>
-                                                                <span><strong>Duration:</strong> @AttemptDuration(attempt)</span>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-
-                                                    @if (!string.IsNullOrWhiteSpace(attempt.Input))
-                                                    {
-                                                        <details class="mt-3">
-                                                            <summary class="small text-muted" style="cursor:pointer">Input for run @(runIndex + 1)</summary>
-                                                            <pre class="json-block mt-2">@attempt.Input</pre>
-                                                        </details>
-                                                    }
-
-                                                    @if (!string.IsNullOrWhiteSpace(attempt.Error))
-                                                    {
-                                                        <div class="trail-error-panel">@attempt.Error</div>
-                                                    }
-
-                                                    @if (!string.IsNullOrWhiteSpace(attempt.Output))
-                                                    {
-                                                        <details class="mt-3">
-                                                            <summary class="small text-muted" style="cursor:pointer">Output for run @(runIndex + 1)</summary>
-                                                            <pre class="json-block mt-2">@attempt.Output</pre>
-                                                        </details>
-                                                    }
-                                                </div>
-                                            }
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
+                        <div class="text-muted small">
+                            <div><strong>Scheduled:</strong> @FormatUtc(focusAttempt.ScheduledAt)</div>
+                            <div><strong>Started:</strong> @(focusAttempt.StartedAt.HasValue ? FormatUtc(focusAttempt.StartedAt.Value) : "-")</div>
+                            <div><strong>Completed:</strong> @(focusAttempt.CompletedAt.HasValue ? FormatUtc(focusAttempt.CompletedAt.Value) : "-")</div>
+                            <div><strong>Duration:</strong> @AttemptDuration(focusAttempt)</div>
                         </div>
                     }
                 </div>
-            }
+
+                @if (!string.IsNullOrWhiteSpace(focusStep.LatestError))
+                {
+                    <div class="err-box">@focusStep.LatestError</div>
+                }
+
+                <div class="step-signals">
+                    @if (focusStep.NextRetryAt.HasValue)
+                    {
+                        <span class="signal-pill retry">Retry scheduled for @FormatUtc(focusStep.NextRetryAt.Value)</span>
+                    }
+                    @if (focusStep.WaitingUntil.HasValue)
+                    {
+                        <span class="signal-pill wait">Waiting until @FormatUtc(focusStep.WaitingUntil.Value)</span>
+                    }
+                </div>
+            </div>
+        }
+    }
+
+    <div class="d-flex justify-content-between align-items-end mb-2">
+        <div>
+            <h5 class="fw-semibold mb-1">Step Trail</h5>
+            <div class="trail-subtitle">Execution timeline with details where things need attention.</div>
         </div>
     </div>
+
+    @if (trail is null || trail.Steps.Count == 0)
+    {
+        <p class="text-muted">No step executions recorded yet.</p>
+    }
+    else
+    {
+        @foreach (var step in trail.Steps)
+        {
+            var isFailed = step.LatestStatus == "Failed";
+            var hasRetries = step.Attempts.Count > 1;
+            var isActive = step.LatestStatus is "Running" or "Waiting" or "Pending";
+            var expand = isFailed || hasRetries || isActive;
+            var last = step.Attempts.Count > 0 ? step.Attempts[^1] : null;
+
+            var icon = step.LatestStatus switch
+            {
+                "Completed" => ("ok", "&#10003;"),
+                "Failed" => ("err", "&#10007;"),
+                "Running" => ("run", "&#9654;"),
+                _ => ("wait", step.StepOrder.ToString())
+            };
+
+            <div class="step-row">
+                <div class="step-icon @icon.Item1">@Html.Raw(icon.Item2)</div>
+
+                <div class="step-shell @StepShellClass(isFailed, isActive, hasRetries)">
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                        <span class="fw-semibold">@step.StepKey</span>
+                        <span class="badge bg-light text-dark border">@step.StepType</span>
+                        @Html.Raw(StepStatusBadge(step.LatestStatus))
+                        @if (!string.IsNullOrWhiteSpace(step.LatestFailureClassification))
+                        {
+                            @Html.Raw(ClassificationBadge(step.LatestFailureClassification))
+                        }
+                        @if (hasRetries)
+                        {
+                            <span class="badge bg-warning text-dark">@($"{step.Attempts.Count} runs")</span>
+                        }
+                        @if (last?.StartedAt is not null && last?.CompletedAt is not null)
+                        {
+                            <span class="text-muted small ms-auto">@FormatDuration(last.CompletedAt.Value - last.StartedAt.Value)</span>
+                        }
+                    </div>
+
+                    <div class="step-meta small">
+                        <span><strong>Scheduled:</strong> @(last is null ? "-" : FormatUtc(last.ScheduledAt))</span>
+                        <span><strong>Started:</strong> @(last?.StartedAt is null ? "-" : FormatUtc(last.StartedAt.Value))</span>
+                        <span><strong>Completed:</strong> @(last?.CompletedAt is null ? "-" : FormatUtc(last.CompletedAt.Value))</span>
+                    </div>
+
+                    @if (step.NextRetryAt.HasValue || step.WaitingUntil.HasValue)
+                    {
+                        <div class="step-signals">
+                            @if (step.NextRetryAt.HasValue)
+                            {
+                                <span class="signal-pill retry">Retry at @FormatUtc(step.NextRetryAt.Value)</span>
+                            }
+                            @if (step.WaitingUntil.HasValue)
+                            {
+                                <span class="signal-pill wait">Waiting until @FormatUtc(step.WaitingUntil.Value)</span>
+                            }
+                        </div>
+                    }
+
+                    @if (!expand)
+                    {
+                        if (!string.IsNullOrWhiteSpace(step.LatestOutput))
+                        {
+                            <details class="mt-2">
+                                <summary class="text-muted small" style="cursor:pointer">Output</summary>
+                                <div class="data-box mt-1">@PrettyJson(step.LatestOutput)</div>
+                            </details>
+                        }
+                    }
+                    else
+                    {
+                        @if (!string.IsNullOrWhiteSpace(step.LatestError))
+                        {
+                            <div class="err-box">@step.LatestError</div>
+                        }
+
+                        @if (!string.IsNullOrWhiteSpace(step.LatestInput))
+                        {
+                            <details class="mt-2">
+                                <summary class="text-muted small fw-semibold" style="cursor:pointer">Latest Input</summary>
+                                <div class="data-box mt-1">@PrettyJson(step.LatestInput)</div>
+                            </details>
+                        }
+
+                        @if (!string.IsNullOrWhiteSpace(step.LatestOutput))
+                        {
+                            @if (isFailed)
+                            {
+                                <details class="mt-2" open>
+                                    <summary class="text-muted small fw-semibold" style="cursor:pointer">Latest Output</summary>
+                                    <div class="data-box mt-1">@PrettyJson(step.LatestOutput)</div>
+                                </details>
+                            }
+                            else
+                            {
+                                <details class="mt-2">
+                                    <summary class="text-muted small fw-semibold" style="cursor:pointer">Latest Output</summary>
+                                    <div class="data-box mt-1">@PrettyJson(step.LatestOutput)</div>
+                                </details>
+                            }
+                        }
+
+                        @if (hasRetries)
+                        {
+                            <div class="mt-3">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <p class="text-muted small fw-semibold mb-0">Run History</p>
+                                </div>
+
+                                <table class="table table-sm small mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>#</th>
+                                            <th>Status</th>
+                                            <th>Started</th>
+                                            <th>Duration</th>
+                                            <th>Error</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @for (var runIndex = 0; runIndex < step.Attempts.Count; runIndex++)
+                                        {
+                                            var attempt = step.Attempts[runIndex];
+                                            var rowClass = attempt.Status switch
+                                            {
+                                                "Completed" => "table-success",
+                                                "Failed" => "table-danger",
+                                                "Running" => "table-primary",
+                                                _ => ""
+                                            };
+
+                                            <tr class="@rowClass">
+                                                <td>
+                                                    <div class="fw-semibold">@(runIndex + 1)</div>
+                                                </td>
+                                                <td>@Html.Raw(StepStatusBadge(attempt.Status))</td>
+                                                <td class="text-muted">@(attempt.StartedAt?.ToString("HH:mm:ss' UTC'") ?? "-")</td>
+                                                <td class="text-muted">@AttemptDurationShort(attempt)</td>
+                                                <td>
+                                                    @if (!string.IsNullOrWhiteSpace(attempt.Error))
+                                                    {
+                                                        <span class="text-danger" title="@attempt.Error">@Truncate(attempt.Error, 90)</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="text-muted">-</span>
+                                                    }
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+        }
+    }
+
+    @if (inst.Status == "AwaitingRetry")
+    {
+        <div class="alert alert-warning mt-3 small">
+            This workflow is waiting for a retry to be picked up by a worker.
+        </div>
+    }
 }
