@@ -295,6 +295,7 @@ public sealed class WorkflowQueryService
                 LatestStatus = latest.Status.ToString(),
                 LatestFailureClassification = latest.FailureClassification,
                 LatestError = latest.Error,
+                LatestInput = latest.Input,
                 LatestOutput = latest.Output,
                 WaitingUntil = waitingUntil,
                 NextRetryAt = nextRetryAt,
@@ -307,6 +308,7 @@ public sealed class WorkflowQueryService
                     ScheduledAt = e.ScheduledAt,
                     StartedAt = e.StartedAt,
                     CompletedAt = e.CompletedAt,
+                    Input = e.Input,
                     Error = e.Error,
                     Output = e.Output
                 }).ToList()

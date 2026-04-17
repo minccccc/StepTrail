@@ -55,6 +55,9 @@ public sealed class TrailStep
     /// <summary>Error message from the most recent attempt, if failed.</summary>
     public string? LatestError { get; init; }
 
+    /// <summary>Resolved input passed into the most recent attempt, if captured.</summary>
+    public string? LatestInput { get; init; }
+
     /// <summary>Output from the most recent attempt, if available.</summary>
     public string? LatestOutput { get; init; }
 
@@ -78,6 +81,7 @@ public sealed class TrailStepAttempt
     public DateTimeOffset ScheduledAt { get; init; }
     public DateTimeOffset? StartedAt { get; init; }
     public DateTimeOffset? CompletedAt { get; init; }
+    public string? Input { get; init; }
     public string? Error { get; init; }
     public string? Output { get; init; }
 }
