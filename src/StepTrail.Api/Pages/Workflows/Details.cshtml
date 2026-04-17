@@ -794,7 +794,64 @@ else if (inst is not null)
         }
     }
 
-    <div class="d-flex justify-content-between align-items-end mb-2">
+    @if (workflowRuns.Count > 0)
+    {
+        <div class="mt-4">
+            <div class="d-flex justify-content-between align-items-end mb-2">
+                <div>
+                    <h5 class="fw-semibold mb-1">Workflow Runs</h5>
+                    <div class="trail-subtitle">See each workflow run from the instance perspective, including where it resumed and where it stopped.</div>
+                </div>
+            </div>
+
+            <div class="run-perspective">
+                @foreach (var run in workflowRuns)
+                {
+                    <div class="run-card @RunCardClass(run.FinalStatus)">
+                        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                            <div>
+                                <div class="d-flex align-items-center gap-2 flex-wrap">
+                                    <span class="fw-semibold">Run @run.RunNumber</span>
+                                    @Html.Raw(StepStatusBadge(run.FinalStatus))
+                                    @if (!string.IsNullOrWhiteSpace(run.FinalFailureClassification))
+                                    {
+                                        @Html.Raw(ClassificationBadge(run.FinalFailureClassification))
+                                    }
+                                </div>
+                                <div class="text-muted small mt-1">@run.KindLabel</div>
+                            </div>
+
+                            <div class="run-meta small">
+                                <span><strong>Started from:</strong> @run.StartedFromStep</span>
+                                <span><strong>Stopped at:</strong> @run.EndedAtStep</span>
+                                <span><strong>Started:</strong> @FormatUtc(run.StartedAt)</span>
+                                <span><strong>Ended:</strong> @(run.CompletedAt.HasValue ? FormatUtc(run.CompletedAt.Value) : "-")</span>
+                                <span><strong>Duration:</strong> @RunDuration(run)</span>
+                            </div>
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(run.FinalError))
+                        {
+                            <div class="err-box">@run.FinalError</div>
+                        }
+
+                        <div class="run-sequence">
+                            @foreach (var stepView in run.Steps)
+                            {
+                                var isTerminal = stepView == run.Steps[^1];
+                                <span class="run-chip @(isTerminal ? RunChipClass(stepView.Status) : string.Empty)">
+                                    <span>@stepView.StepKey</span>
+                                    <span class="text-muted">@stepView.StepOrder</span>
+                                </span>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    <div class="d-flex justify-content-between align-items-end mt-4 mb-2">
         <div>
             <h5 class="fw-semibold mb-1">Step Trail</h5>
             <div class="trail-subtitle">Execution timeline with details where things need attention.</div>
@@ -964,63 +1021,6 @@ else if (inst is not null)
                 </div>
             </div>
         }
-    }
-
-    @if (workflowRuns.Count > 0)
-    {
-        <div class="mt-4">
-            <div class="d-flex justify-content-between align-items-end mb-2">
-                <div>
-                    <h5 class="fw-semibold mb-1">Workflow Runs</h5>
-                    <div class="trail-subtitle">Instance-level view showing each pass through the workflow, where it resumed, and where it stopped.</div>
-                </div>
-            </div>
-
-            <div class="run-perspective">
-                @foreach (var run in workflowRuns)
-                {
-                    <div class="run-card @RunCardClass(run.FinalStatus)">
-                        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
-                            <div>
-                                <div class="d-flex align-items-center gap-2 flex-wrap">
-                                    <span class="fw-semibold">Run @run.RunNumber</span>
-                                    @Html.Raw(StepStatusBadge(run.FinalStatus))
-                                    @if (!string.IsNullOrWhiteSpace(run.FinalFailureClassification))
-                                    {
-                                        @Html.Raw(ClassificationBadge(run.FinalFailureClassification))
-                                    }
-                                </div>
-                                <div class="text-muted small mt-1">@run.KindLabel</div>
-                            </div>
-
-                            <div class="run-meta small">
-                                <span><strong>Started from:</strong> @run.StartedFromStep</span>
-                                <span><strong>Stopped at:</strong> @run.EndedAtStep</span>
-                                <span><strong>Started:</strong> @FormatUtc(run.StartedAt)</span>
-                                <span><strong>Ended:</strong> @(run.CompletedAt.HasValue ? FormatUtc(run.CompletedAt.Value) : "-")</span>
-                                <span><strong>Duration:</strong> @RunDuration(run)</span>
-                            </div>
-                        </div>
-
-                        @if (!string.IsNullOrWhiteSpace(run.FinalError))
-                        {
-                            <div class="err-box">@run.FinalError</div>
-                        }
-
-                        <div class="run-sequence">
-                            @foreach (var stepView in run.Steps)
-                            {
-                                var isTerminal = stepView == run.Steps[^1];
-                                <span class="run-chip @(isTerminal ? RunChipClass(stepView.Status) : string.Empty)">
-                                    <span>@stepView.StepKey</span>
-                                    <span class="text-muted">@stepView.StepOrder</span>
-                                </span>
-                            }
-                        </div>
-                    </div>
-                }
-            </div>
-        </div>
     }
 
     @if (inst.Status == "AwaitingRetry")
