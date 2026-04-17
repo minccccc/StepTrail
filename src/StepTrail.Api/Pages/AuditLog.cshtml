@@ -1,13 +1,13 @@
-@page "/ops/telemetry"
-@model StepTrail.Api.Pages.TelemetryModel
+@page "/ops/audit-log"
+@model StepTrail.Api.Pages.AuditLogModel
 @{
-    ViewData["Title"] = "Pilot Telemetry";
+    ViewData["Title"] = "Audit Log";
 }
 
 <div class="d-flex align-items-center justify-content-between mb-3">
     <div>
-        <h1 class="h3 mb-1">Pilot Telemetry</h1>
-        <p class="text-muted mb-0 small">Product usage events for the last @Model.Days day(s).</p>
+        <h1 class="h3 mb-1">Audit Log</h1>
+        <p class="text-muted mb-0 small">Activity events for the last @Model.Days day(s).</p>
     </div>
     <form method="get" class="d-flex align-items-center gap-2">
         <label class="form-label small text-muted mb-0">Period:</label>

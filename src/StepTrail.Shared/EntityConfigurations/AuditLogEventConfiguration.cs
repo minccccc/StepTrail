@@ -4,10 +4,11 @@ using StepTrail.Shared.Entities;
 
 namespace StepTrail.Shared.EntityConfigurations;
 
-public class PilotTelemetryEventConfiguration : IEntityTypeConfiguration<PilotTelemetryEvent>
+public class AuditLogEventConfiguration : IEntityTypeConfiguration<AuditLogEvent>
 {
-    public void Configure(EntityTypeBuilder<PilotTelemetryEvent> builder)
+    public void Configure(EntityTypeBuilder<AuditLogEvent> builder)
     {
+        // Keep the same table name to avoid a migration rename
         builder.ToTable("pilot_telemetry_events");
 
         builder.HasKey(e => e.Id);

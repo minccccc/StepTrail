@@ -1,7 +1,7 @@
 using StepTrail.Api.Models;
 using StepTrail.Shared.Definitions;
 using StepTrail.Shared.Runtime;
-using StepTrail.Shared.Telemetry;
+using StepTrail.Shared.AuditLog;
 using StepTrail.Shared.Workflows;
 using StepTrail.Shared;
 
@@ -10,9 +10,9 @@ namespace StepTrail.Api.Services;
 public sealed class WorkflowInstanceService
 {
     private readonly WorkflowStartService _workflowStartService;
-    private readonly TelemetryService? _telemetry;
+    private readonly AuditLogService? _telemetry;
 
-    public WorkflowInstanceService(WorkflowStartService workflowStartService, TelemetryService telemetry)
+    public WorkflowInstanceService(WorkflowStartService workflowStartService, AuditLogService telemetry)
     {
         _workflowStartService = workflowStartService;
         _telemetry = telemetry;
@@ -47,7 +47,7 @@ public sealed class WorkflowInstanceService
             if (result.Created && _telemetry is not null)
             {
                 await _telemetry.RecordAsync(
-                    TelemetryEvents.WorkflowStarted, TelemetryEvents.Categories.Execution, cancellationToken,
+                    AuditLogEvents.WorkflowStarted, AuditLogEvents.Categories.Execution, cancellationToken,
                     workflowKey: result.WorkflowKey, workflowInstanceId: result.Id, status: result.Status);
             }
 

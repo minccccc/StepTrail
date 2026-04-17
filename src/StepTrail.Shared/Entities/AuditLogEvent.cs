@@ -1,11 +1,10 @@
 namespace StepTrail.Shared.Entities;
 
 /// <summary>
-/// Structured telemetry event for pilot usage instrumentation.
-/// Records product-relevant milestones (authoring, execution, errors) to help
-/// understand how the product is actually being used and where users get stuck.
+/// Structured audit log event recording who did what and when.
+/// Covers authoring actions, execution milestones, and error/friction events.
 /// </summary>
-public class PilotTelemetryEvent
+public class AuditLogEvent
 {
     public Guid Id { get; set; }
     public string EventName { get; set; } = string.Empty;

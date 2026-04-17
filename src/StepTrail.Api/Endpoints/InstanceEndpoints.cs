@@ -1,7 +1,7 @@
 using System.Security.Claims;
 using StepTrail.Api.Models;
 using StepTrail.Api.Services;
-using StepTrail.Shared.Telemetry;
+using StepTrail.Shared.AuditLog;
 
 namespace StepTrail.Api.Endpoints;
 
@@ -165,13 +165,13 @@ public static class InstanceEndpoints
         ops.MapPost("/workflow-instances/{id:guid}/retry", async (
             Guid id,
             WorkflowRetryService service,
-            TelemetryService telemetry,
+            AuditLogService telemetry,
             CancellationToken ct) =>
         {
             try
             {
                 var response = await service.RetryAsync(id, ct);
-                await telemetry.RecordAsync(TelemetryEvents.ManualRetryTriggered, TelemetryEvents.Categories.Execution, ct,
+                await telemetry.RecordAsync(AuditLogEvents.ManualRetryTriggered, AuditLogEvents.Categories.Execution, ct,
                     workflowKey: response.WorkflowKey, workflowInstanceId: id, status: response.InstanceStatus);
                 return Results.Ok(response);
             }
@@ -188,13 +188,13 @@ public static class InstanceEndpoints
         ops.MapPost("/workflow-instances/{id:guid}/replay", async (
             Guid id,
             WorkflowRetryService service,
-            TelemetryService telemetry,
+            AuditLogService telemetry,
             CancellationToken ct) =>
         {
             try
             {
                 var response = await service.ReplayAsync(id, ct);
-                await telemetry.RecordAsync(TelemetryEvents.ReplayTriggered, TelemetryEvents.Categories.Execution, ct,
+                await telemetry.RecordAsync(AuditLogEvents.ReplayTriggered, AuditLogEvents.Categories.Execution, ct,
                     workflowKey: response.WorkflowKey, workflowInstanceId: id, status: response.InstanceStatus);
                 return Results.Ok(response);
             }

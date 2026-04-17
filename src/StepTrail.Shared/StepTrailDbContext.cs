@@ -26,7 +26,7 @@ public class StepTrailDbContext : DbContext
     public DbSet<ExecutableStepDefinitionRecord> ExecutableStepDefinitions => Set<ExecutableStepDefinitionRecord>();
     public DbSet<AlertRecord> AlertRecords => Set<AlertRecord>();
     public DbSet<AlertDeliveryRecord> AlertDeliveryRecords => Set<AlertDeliveryRecord>();
-    public DbSet<PilotTelemetryEvent> PilotTelemetryEvents => Set<PilotTelemetryEvent>();
+    public DbSet<AuditLogEvent> AuditLogEvents => Set<AuditLogEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -47,6 +47,6 @@ public class StepTrailDbContext : DbContext
         modelBuilder.ApplyConfiguration(new ExecutableStepDefinitionRecordConfiguration());
         modelBuilder.ApplyConfiguration(new AlertRecordConfiguration());
         modelBuilder.ApplyConfiguration(new AlertDeliveryRecordConfiguration());
-        modelBuilder.ApplyConfiguration(new PilotTelemetryEventConfiguration());
+        modelBuilder.ApplyConfiguration(new AuditLogEventConfiguration());
     }
 }

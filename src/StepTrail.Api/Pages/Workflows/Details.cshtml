@@ -730,6 +730,13 @@ else if (inst is not null)
         </div>
     }
 
+    @if (inst.Status == "AwaitingRetry")
+    {
+        <div class="alert alert-warning mt-3 small">
+            This workflow is waiting for a retry to be picked up by a worker.
+        </div>
+    }
+    
     @if (trail is not null && trail.Steps.Count > 0)
     {
         <div class="trail-overview mb-3">
@@ -1074,10 +1081,4 @@ else if (inst is not null)
         </div>
     }
 
-    @if (inst.Status == "AwaitingRetry")
-    {
-        <div class="alert alert-warning mt-3 small">
-            This workflow is waiting for a retry to be picked up by a worker.
-        </div>
-    }
 }

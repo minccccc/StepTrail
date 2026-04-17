@@ -72,9 +72,9 @@ public static class OpsEndpoints
             return Results.NoContent();
         });
 
-        // ── Telemetry ────────────────────────────────────────────────────────────────
+        // ── Audit Log ────────────────────────────────────────────────────────────────
 
-        ops.MapGet("/telemetry", async (
+        ops.MapGet("/audit-log", async (
             string? category,
             int? days,
             StepTrailDbContext db,
@@ -82,7 +82,7 @@ public static class OpsEndpoints
         {
             var since = DateTimeOffset.UtcNow.AddDays(-(days ?? 30));
 
-            var query = db.PilotTelemetryEvents
+            var query = db.AuditLogEvents
                 .Where(e => e.OccurredAtUtc >= since);
 
             if (!string.IsNullOrWhiteSpace(category))
@@ -143,7 +143,7 @@ public static class OpsEndpoints
                 };
             });
 
-            var summary = await db.PilotTelemetryEvents
+            var summary = await db.AuditLogEvents
                 .Where(e => e.OccurredAtUtc >= since)
                 .GroupBy(e => new { e.Category, e.EventName })
                 .Select(g => new { g.Key.Category, g.Key.EventName, Count = g.Count() })

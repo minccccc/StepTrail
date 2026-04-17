@@ -6,7 +6,7 @@ using StepTrail.Api.Services;
 using StepTrail.Api.UI;
 using StepTrail.Api.Workflows;
 using StepTrail.Shared;
-using StepTrail.Shared.Telemetry;
+using StepTrail.Shared.AuditLog;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -64,7 +64,7 @@ builder.Services.AddScoped<WebhookSignatureValidationService>();
 builder.Services.AddScoped<WebhookWorkflowTriggerService>();
 builder.Services.AddScoped<WorkflowRetryService>();
 builder.Services.AddScoped<WorkflowQueryService>();
-builder.Services.AddScoped<TelemetryService>();
+builder.Services.AddScoped<AuditLogService>();
 
 // ── Build & configure pipeline ──────────────────────────────────────────────
 var app = builder.Build();

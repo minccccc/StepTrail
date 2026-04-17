@@ -24,7 +24,7 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration.GetValue<string>("Alerts:We
 
 builder.Services.AddScoped<AlertService>();
 builder.Services.AddSingleton(AlertRuleEvaluator.CreateDefault());
-builder.Services.AddScoped<StepTrail.Shared.Telemetry.TelemetryService>();
+builder.Services.AddScoped<StepTrail.Shared.AuditLog.AuditLogService>();
 
 builder.Services.AddScoped<StepExecutionClaimer>();
 builder.Services.AddScoped<StepFailureService>();

@@ -4,7 +4,7 @@ using StepTrail.Shared;
 using StepTrail.Shared.Definitions;
 using StepTrail.Shared.Entities;
 using StepTrail.Shared.Workflows;
-using StepTrail.Shared.Telemetry;
+using StepTrail.Shared.AuditLog;
 using StepTrail.Worker.Alerts;
 
 namespace StepTrail.Worker;
@@ -27,14 +27,14 @@ public sealed class StepFailureService
     private readonly StepTrailDbContext _db;
     private readonly AlertService _alertService;
     private readonly AlertRuleEvaluator _alertRuleEvaluator;
-    private readonly TelemetryService _telemetry;
+    private readonly AuditLogService _telemetry;
     private readonly ILogger<StepFailureService> _logger;
 
     public StepFailureService(
         StepTrailDbContext db,
         AlertService alertService,
         AlertRuleEvaluator alertRuleEvaluator,
-        TelemetryService telemetry,
+        AuditLogService telemetry,
         ILogger<StepFailureService> logger)
     {
         _db = db;
@@ -225,7 +225,7 @@ public sealed class StepFailureService
 
         if (workflowFailed)
         {
-            await _telemetry.RecordAsync(TelemetryEvents.WorkflowFailed, TelemetryEvents.Categories.Execution, ct,
+            await _telemetry.RecordAsync(AuditLogEvents.WorkflowFailed, AuditLogEvents.Categories.Execution, ct,
                 workflowKey: resolvedKey, workflowInstanceId: execution.WorkflowInstanceId, status: WorkflowInstanceStatus.Failed.ToString(),
                 metadata: new { stepKey = execution.StepKey, attempt = execution.Attempt,
                     classification = failureClassification?.ToString() });

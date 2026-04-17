@@ -449,11 +449,11 @@ public sealed class WorkflowApiClient
         return null;
     }
 
-    public async Task<TelemetryDashboard?> GetTelemetryAsync(int days = 30, CancellationToken ct = default)
+    public async Task<AuditLogDashboard?> GetAuditLogAsync(int days = 30, CancellationToken ct = default)
     {
         try
         {
-            return await _http.GetFromJsonAsync<TelemetryDashboard>($"/telemetry?days={days}", ct);
+            return await _http.GetFromJsonAsync<AuditLogDashboard>($"/audit-log?days={days}", ct);
         }
         catch
         {
@@ -501,21 +501,21 @@ public sealed class CloneDefinitionResponse
     public string Status { get; init; } = string.Empty;
 }
 
-public sealed class TelemetryDashboard
+public sealed class AuditLogDashboard
 {
     public DateTimeOffset Since { get; init; }
-    public IReadOnlyList<TelemetrySummaryEntry> Summary { get; init; } = [];
-    public IReadOnlyList<TelemetryRecentEvent> RecentEvents { get; init; } = [];
+    public IReadOnlyList<AuditLogSummaryEntry> Summary { get; init; } = [];
+    public IReadOnlyList<AuditLogRecentEvent> RecentEvents { get; init; } = [];
 }
 
-public sealed class TelemetrySummaryEntry
+public sealed class AuditLogSummaryEntry
 {
     public string Category { get; init; } = string.Empty;
     public string EventName { get; init; } = string.Empty;
     public int Count { get; init; }
 }
 
-public sealed class TelemetryRecentEvent
+public sealed class AuditLogRecentEvent
 {
     public string EventName { get; init; } = string.Empty;
     public string Category { get; init; } = string.Empty;

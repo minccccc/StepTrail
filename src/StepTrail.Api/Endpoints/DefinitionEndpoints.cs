@@ -5,7 +5,7 @@ using StepTrail.Shared;
 using StepTrail.Shared.Definitions;
 using StepTrail.Shared.Definitions.Persistence;
 using StepTrail.Shared.Runtime.AvailableFields;
-using StepTrail.Shared.Telemetry;
+using StepTrail.Shared.AuditLog;
 using StepTrail.Shared.Workflows;
 
 namespace StepTrail.Api.Endpoints;
@@ -126,7 +126,7 @@ public static class DefinitionEndpoints
             CreateFromDescriptorRequest request,
             IWorkflowRegistry registry,
             IWorkflowDefinitionRepository repository,
-            TelemetryService telemetry,
+            AuditLogService telemetry,
             CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(request.Name))
@@ -195,7 +195,7 @@ public static class DefinitionEndpoints
                 return Results.Conflict(new { error = ex.Message });
             }
 
-            await telemetry.RecordAsync(TelemetryEvents.WorkflowCreatedFromTemplate, TelemetryEvents.Categories.Authoring, ct,
+            await telemetry.RecordAsync(AuditLogEvents.WorkflowCreatedFromTemplate, AuditLogEvents.Categories.Authoring, ct,
                 workflowKey: definition.Key, workflowDefinitionId: definition.Id, status: definition.Status.ToString(), triggerType: triggerType.ToString(),
                 metadata: new { descriptorKey = descriptor.Key, descriptorVersion = descriptor.Version, stepCount = steps.Count });
 
@@ -209,7 +209,7 @@ public static class DefinitionEndpoints
         ops.MapPost("/workflow-definitions/blank", async (
             CreateBlankDefinitionRequest request,
             IWorkflowDefinitionRepository repository,
-            TelemetryService telemetry,
+            AuditLogService telemetry,
             CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(request.Name))
@@ -248,7 +248,7 @@ public static class DefinitionEndpoints
                 return Results.Conflict(new { error = ex.Message });
             }
 
-            await telemetry.RecordAsync(TelemetryEvents.WorkflowCreatedBlank, TelemetryEvents.Categories.Authoring, ct,
+            await telemetry.RecordAsync(AuditLogEvents.WorkflowCreatedBlank, AuditLogEvents.Categories.Authoring, ct,
                 workflowKey: definition.Key, workflowDefinitionId: definition.Id, status: definition.Status.ToString(), triggerType: triggerType.ToString());
 
             return Results.Created(
@@ -261,7 +261,7 @@ public static class DefinitionEndpoints
         ops.MapPost("/workflow-definitions/clone", async (
             CloneWorkflowDefinitionRequest request,
             IWorkflowDefinitionRepository repository,
-            TelemetryService telemetry,
+            AuditLogService telemetry,
             CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(request.Name))
@@ -317,7 +317,7 @@ public static class DefinitionEndpoints
                 return Results.Conflict(new { error = ex.Message });
             }
 
-            await telemetry.RecordAsync(TelemetryEvents.WorkflowCloned, TelemetryEvents.Categories.Authoring, ct,
+            await telemetry.RecordAsync(AuditLogEvents.WorkflowCloned, AuditLogEvents.Categories.Authoring, ct,
                 workflowKey: cloned.Key, workflowDefinitionId: cloned.Id, status: cloned.Status.ToString(),
                 metadata: new { clonedFromId = request.TemplateId, clonedFromKey = template.Key });
 
@@ -747,7 +747,7 @@ public static class DefinitionEndpoints
         ops.MapPost("/workflow-definitions/{id:guid}/activate", async (
             Guid id,
             IWorkflowDefinitionRepository repository,
-            TelemetryService telemetry,
+            AuditLogService telemetry,
             CancellationToken ct) =>
         {
             var definition = await repository.GetByIdAsync(id, ct);
@@ -774,7 +774,7 @@ public static class DefinitionEndpoints
             catch (WorkflowDefinitionValidationException ex)
             {
                 var errors = ex.ValidationResult.Errors.Select(e => e.Message).ToList();
-                await telemetry.RecordAsync(TelemetryEvents.ActivationFailed, TelemetryEvents.Categories.Error, ct,
+                await telemetry.RecordAsync(AuditLogEvents.ActivationFailed, AuditLogEvents.Categories.Error, ct,
                     workflowKey: definition.Key, workflowDefinitionId: id,
                     metadata: new { errors });
                 return Results.BadRequest(new { error = "Activation validation failed.", errors });
@@ -784,7 +784,7 @@ public static class DefinitionEndpoints
                 return Results.Conflict(new { error = ex.Message });
             }
 
-            await telemetry.RecordAsync(TelemetryEvents.WorkflowActivated, TelemetryEvents.Categories.Authoring, ct,
+            await telemetry.RecordAsync(AuditLogEvents.WorkflowActivated, AuditLogEvents.Categories.Authoring, ct,
                 workflowKey: definition.Key, workflowDefinitionId: id, status: WorkflowDefinitionStatus.Active.ToString(),
                 triggerType: definition.TriggerDefinition.Type.ToString(),
                 metadata: new { stepCount = definition.StepDefinitions.Count });
@@ -797,7 +797,7 @@ public static class DefinitionEndpoints
         ops.MapPost("/workflow-definitions/{id:guid}/deactivate", async (
             Guid id,
             StepTrailDbContext db,
-            TelemetryService telemetry,
+            AuditLogService telemetry,
             CancellationToken ct) =>
         {
             var record = await db.ExecutableWorkflowDefinitions.FindAsync([id], ct);
@@ -814,7 +814,7 @@ public static class DefinitionEndpoints
             record.UpdatedAtUtc = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(ct);
 
-            await telemetry.RecordAsync(TelemetryEvents.WorkflowDeactivated, TelemetryEvents.Categories.Authoring, ct,
+            await telemetry.RecordAsync(AuditLogEvents.WorkflowDeactivated, AuditLogEvents.Categories.Authoring, ct,
                 workflowKey: record.Key, workflowDefinitionId: id, status: record.Status.ToString());
 
             return Results.Ok(new { id, status = "Inactive" });

@@ -1,10 +1,10 @@
-namespace StepTrail.Shared.Telemetry;
+namespace StepTrail.Shared.AuditLog;
 
 /// <summary>
-/// Stable event name constants for pilot telemetry instrumentation.
+/// Stable event name constants for the audit log.
 /// Grouped by category to make it clear what each event represents.
 /// </summary>
-public static class TelemetryEvents
+public static class AuditLogEvents
 {
     public static class Categories
     {
