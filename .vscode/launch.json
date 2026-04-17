@@ -29,12 +29,31 @@
                 "DOTNET_ENVIRONMENT": "Development"
             },
             "console": "integratedTerminal"
+        },
+        {
+            "name": "StepTrail.TestLab",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${workspaceFolder}/src/StepTrail.TestLab/bin/Debug/net9.0/StepTrail.TestLab.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/src/StepTrail.TestLab",
+            "stopAtEntry": false,
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development",
+                "ASPNETCORE_URLS": "http://localhost:5150"
+            },
+            "console": "integratedTerminal"
         }
     ],
     "compounds": [
         {
             "name": "StepTrail: API + Worker",
             "configurations": ["StepTrail.Api", "StepTrail.Worker"]
+        },
+        {
+            "name": "StepTrail: API + Worker + TestLab",
+            "configurations": ["StepTrail.Api", "StepTrail.Worker", "StepTrail.TestLab"]
         }
     ]
 }
