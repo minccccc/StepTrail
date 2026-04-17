@@ -18,6 +18,7 @@
     var retriedSteps = trail?.Steps.Count(step => step.Attempts.Count > 1) ?? 0;
     var focusStep = ResolveFocusStep(trail, inst?.Status);
     var focusAttempt = focusStep is null || focusStep.Attempts.Count == 0 ? null : focusStep.Attempts[^1];
+    var workflowRuns = BuildWorkflowRuns(trail);
 }
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
@@ -148,6 +149,115 @@
         return string.Join(" ", classes);
     }
 
+    static List<WorkflowRunView> BuildWorkflowRuns(WorkflowTrail? trail)
+    {
+        if (trail is null || trail.Steps.Count == 0)
+        {
+            return [];
+        }
+
+        var flattened = trail.Steps
+            .SelectMany(step => step.Attempts.Select(attempt => new WorkflowRunStepView
+            {
+                StepKey = step.StepKey,
+                StepType = step.StepType,
+                StepOrder = step.StepOrder,
+                Attempt = attempt.Attempt,
+                Status = attempt.Status,
+                FailureClassification = attempt.FailureClassification,
+                ScheduledAt = attempt.ScheduledAt,
+                StartedAt = attempt.StartedAt,
+                CompletedAt = attempt.CompletedAt,
+                Error = attempt.Error
+            }))
+            .OrderBy(step => step.ScheduledAt)
+            .ThenBy(step => step.StepOrder)
+            .ThenBy(step => step.StartedAt ?? step.ScheduledAt)
+            .ToList();
+
+        if (flattened.Count == 0)
+        {
+            return [];
+        }
+
+        var groups = new List<List<WorkflowRunStepView>>();
+        List<WorkflowRunStepView>? currentGroup = null;
+        int? lastStepOrder = null;
+
+        foreach (var step in flattened)
+        {
+            if (currentGroup is null || (lastStepOrder.HasValue && step.StepOrder <= lastStepOrder.Value))
+            {
+                currentGroup = [];
+                groups.Add(currentGroup);
+            }
+
+            currentGroup.Add(step);
+            lastStepOrder = step.StepOrder;
+        }
+
+        var runs = new List<WorkflowRunView>(groups.Count);
+
+        for (var i = 0; i < groups.Count; i++)
+        {
+            var group = groups[i];
+            var first = group[0];
+            var last = group[^1];
+
+            var kindLabel = i == 0
+                ? "Initial pass"
+                : first.StepOrder <= 1
+                    ? "Replay from the beginning"
+                    : $"Resumed from {first.StepKey}";
+
+            runs.Add(new WorkflowRunView
+            {
+                RunNumber = i + 1,
+                KindLabel = kindLabel,
+                StartedFromStep = first.StepKey,
+                EndedAtStep = last.StepKey,
+                FinalStatus = last.Status,
+                FinalFailureClassification = last.FailureClassification,
+                FinalError = last.Error,
+                StartedAt = first.StartedAt ?? first.ScheduledAt,
+                CompletedAt = last.CompletedAt,
+                Steps = group
+            });
+        }
+
+        return runs;
+    }
+
+    static string RunDuration(WorkflowRunView run)
+    {
+        if (!run.CompletedAt.HasValue)
+        {
+            return "Still running";
+        }
+
+        return FormatDuration(run.CompletedAt.Value - run.StartedAt);
+    }
+
+    static string RunCardClass(string status) => status switch
+    {
+        "Failed" => "is-failed",
+        "Running" => "is-running",
+        "Pending" => "is-running",
+        "Waiting" => "is-waiting",
+        "Completed" => "is-completed",
+        _ => string.Empty
+    };
+
+    static string RunChipClass(string status) => status switch
+    {
+        "Failed" => "is-terminal-failed",
+        "Running" => "is-terminal-running",
+        "Pending" => "is-terminal-running",
+        "Waiting" => "is-terminal-running",
+        "Completed" => "is-terminal-completed",
+        _ => string.Empty
+    };
+
     static string PrettyJson(string json)
     {
         try
@@ -161,6 +271,34 @@
         {
             return json;
         }
+    }
+
+    private sealed class WorkflowRunView
+    {
+        public required int RunNumber { get; init; }
+        public required string KindLabel { get; init; }
+        public required string StartedFromStep { get; init; }
+        public required string EndedAtStep { get; init; }
+        public required string FinalStatus { get; init; }
+        public string? FinalFailureClassification { get; init; }
+        public string? FinalError { get; init; }
+        public required DateTimeOffset StartedAt { get; init; }
+        public DateTimeOffset? CompletedAt { get; init; }
+        public required IReadOnlyList<WorkflowRunStepView> Steps { get; init; }
+    }
+
+    private sealed class WorkflowRunStepView
+    {
+        public required string StepKey { get; init; }
+        public string? StepType { get; init; }
+        public required int StepOrder { get; init; }
+        public required int Attempt { get; init; }
+        public required string Status { get; init; }
+        public string? FailureClassification { get; init; }
+        public required DateTimeOffset ScheduledAt { get; init; }
+        public DateTimeOffset? StartedAt { get; init; }
+        public DateTimeOffset? CompletedAt { get; init; }
+        public string? Error { get; init; }
     }
 }
 
@@ -350,6 +488,84 @@
         border-radius: .6rem;
         color: #64748b;
         padding: .55rem .7rem;
+    }
+
+    .run-perspective {
+        display: grid;
+        gap: .85rem;
+    }
+
+    .run-card {
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: 1rem;
+        box-shadow: 0 .25rem .8rem rgba(15, 23, 42, .04);
+        padding: 1rem 1.05rem;
+    }
+
+    .run-card.is-failed {
+        border-color: #f1aeb5;
+        box-shadow: 0 .3rem .95rem rgba(220, 53, 69, .08);
+    }
+
+    .run-card.is-running {
+        border-color: #9ec5fe;
+    }
+
+    .run-card.is-waiting {
+        border-color: #9eeaf9;
+    }
+
+    .run-card.is-completed {
+        border-color: #badbcc;
+    }
+
+    .run-meta {
+        color: #6c757d;
+        display: flex;
+        flex-wrap: wrap;
+        gap: .35rem 1rem;
+    }
+
+    .run-meta span {
+        white-space: nowrap;
+    }
+
+    .run-sequence {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .4rem;
+        margin-top: .75rem;
+    }
+
+    .run-chip {
+        align-items: center;
+        background: #f8fafc;
+        border: 1px solid #dbe4ee;
+        border-radius: 999px;
+        color: #334155;
+        display: inline-flex;
+        font-size: .76rem;
+        gap: .35rem;
+        padding: .28rem .65rem;
+    }
+
+    .run-chip.is-terminal-failed {
+        background: #fff3f3;
+        border-color: #f1aeb5;
+        color: #842029;
+    }
+
+    .run-chip.is-terminal-completed {
+        background: #f0fff4;
+        border-color: #badbcc;
+        color: #146c43;
+    }
+
+    .run-chip.is-terminal-running {
+        background: #f2f7ff;
+        border-color: #9ec5fe;
+        color: #084298;
     }
 
     @@media (max-width: 767.98px) {
@@ -748,6 +964,63 @@ else if (inst is not null)
                 </div>
             </div>
         }
+    }
+
+    @if (workflowRuns.Count > 0)
+    {
+        <div class="mt-4">
+            <div class="d-flex justify-content-between align-items-end mb-2">
+                <div>
+                    <h5 class="fw-semibold mb-1">Workflow Runs</h5>
+                    <div class="trail-subtitle">Instance-level view showing each pass through the workflow, where it resumed, and where it stopped.</div>
+                </div>
+            </div>
+
+            <div class="run-perspective">
+                @foreach (var run in workflowRuns)
+                {
+                    <div class="run-card @RunCardClass(run.FinalStatus)">
+                        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                            <div>
+                                <div class="d-flex align-items-center gap-2 flex-wrap">
+                                    <span class="fw-semibold">Run @run.RunNumber</span>
+                                    @Html.Raw(StepStatusBadge(run.FinalStatus))
+                                    @if (!string.IsNullOrWhiteSpace(run.FinalFailureClassification))
+                                    {
+                                        @Html.Raw(ClassificationBadge(run.FinalFailureClassification))
+                                    }
+                                </div>
+                                <div class="text-muted small mt-1">@run.KindLabel</div>
+                            </div>
+
+                            <div class="run-meta small">
+                                <span><strong>Started from:</strong> @run.StartedFromStep</span>
+                                <span><strong>Stopped at:</strong> @run.EndedAtStep</span>
+                                <span><strong>Started:</strong> @FormatUtc(run.StartedAt)</span>
+                                <span><strong>Ended:</strong> @(run.CompletedAt.HasValue ? FormatUtc(run.CompletedAt.Value) : "-")</span>
+                                <span><strong>Duration:</strong> @RunDuration(run)</span>
+                            </div>
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(run.FinalError))
+                        {
+                            <div class="err-box">@run.FinalError</div>
+                        }
+
+                        <div class="run-sequence">
+                            @foreach (var stepView in run.Steps)
+                            {
+                                var isTerminal = stepView == run.Steps[^1];
+                                <span class="run-chip @(isTerminal ? RunChipClass(stepView.Status) : string.Empty)">
+                                    <span>@stepView.StepKey</span>
+                                    <span class="text-muted">@stepView.StepOrder</span>
+                                </span>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
     }
 
     @if (inst.Status == "AwaitingRetry")
