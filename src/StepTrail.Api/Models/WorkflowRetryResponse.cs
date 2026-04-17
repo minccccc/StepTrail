@@ -3,6 +3,7 @@ namespace StepTrail.Api.Models;
 public sealed class WorkflowRetryResponse
 {
     public Guid InstanceId { get; init; }
+    public string WorkflowKey { get; init; } = string.Empty;
     public string InstanceStatus { get; init; } = string.Empty;
 
     /// <summary>

@@ -86,7 +86,7 @@ public class WebhookWorkflowTriggerServiceIntegrationTests
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
             var resolver = new ExecutableWorkflowTriggerResolver(dbContext, repository);
-            var workflowInstanceService = new WorkflowInstanceService(
+            var workflowInstanceService = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -181,7 +181,7 @@ public class WebhookWorkflowTriggerServiceIntegrationTests
         await using var dbContext = _fixture.CreateDbContext();
         var repository = new WorkflowDefinitionRepository(dbContext);
         var resolver = new ExecutableWorkflowTriggerResolver(dbContext, repository);
-        var workflowInstanceService = new WorkflowInstanceService(
+        var workflowInstanceService = WorkflowInstanceService.CreateForTest(
             dbContext,
             new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
             repository);
@@ -237,7 +237,7 @@ public class WebhookWorkflowTriggerServiceIntegrationTests
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
             var resolver = new ExecutableWorkflowTriggerResolver(dbContext, repository);
-            var workflowInstanceService = new WorkflowInstanceService(
+            var workflowInstanceService = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -311,7 +311,7 @@ public class WebhookWorkflowTriggerServiceIntegrationTests
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
             var resolver = new ExecutableWorkflowTriggerResolver(dbContext, repository);
-            var workflowInstanceService = new WorkflowInstanceService(
+            var workflowInstanceService = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -386,7 +386,7 @@ public class WebhookWorkflowTriggerServiceIntegrationTests
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
             var resolver = new ExecutableWorkflowTriggerResolver(dbContext, repository);
-            var workflowInstanceService = new WorkflowInstanceService(
+            var workflowInstanceService = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -454,7 +454,7 @@ public class WebhookWorkflowTriggerServiceIntegrationTests
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
             var resolver = new ExecutableWorkflowTriggerResolver(dbContext, repository);
-            var workflowInstanceService = new WorkflowInstanceService(
+            var workflowInstanceService = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -517,7 +517,7 @@ public class WebhookWorkflowTriggerServiceIntegrationTests
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
             var resolver = new ExecutableWorkflowTriggerResolver(dbContext, repository);
-            var workflowInstanceService = new WorkflowInstanceService(
+            var workflowInstanceService = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -605,7 +605,7 @@ public class WebhookWorkflowTriggerServiceIntegrationTests
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
             var resolver = new ExecutableWorkflowTriggerResolver(dbContext, repository);
-            var workflowInstanceService = new WorkflowInstanceService(
+            var workflowInstanceService = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -682,7 +682,7 @@ public class WebhookWorkflowTriggerServiceIntegrationTests
             var dbContext = _fixture.CreateDbContext();
             var repository = new WorkflowDefinitionRepository(dbContext);
             var resolver = new ExecutableWorkflowTriggerResolver(dbContext, repository);
-            var workflowInstanceService = new WorkflowInstanceService(
+            var workflowInstanceService = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);

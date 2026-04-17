@@ -88,10 +88,46 @@ public static class OpsEndpoints
             if (!string.IsNullOrWhiteSpace(category))
                 query = query.Where(e => e.Category == category);
 
-            var events = await query
+            var rawEvents = await query
                 .OrderByDescending(e => e.OccurredAtUtc)
                 .Take(500)
-                .Select(e => new
+                .ToListAsync(ct);
+
+            // Batch-load current statuses from the actual tables
+            var instanceIds = rawEvents
+                .Where(e => e.WorkflowInstanceId.HasValue)
+                .Select(e => e.WorkflowInstanceId!.Value)
+                .Distinct().ToList();
+
+            var instanceStatuses = instanceIds.Count > 0
+                ? await db.WorkflowInstances
+                    .Where(i => instanceIds.Contains(i.Id))
+                    .Select(i => new { i.Id, i.Status })
+                    .ToDictionaryAsync(i => i.Id, i => i.Status.ToString(), ct)
+                : new Dictionary<Guid, string>();
+
+            var definitionIds = rawEvents
+                .Where(e => e.WorkflowDefinitionId.HasValue && !e.WorkflowInstanceId.HasValue)
+                .Select(e => e.WorkflowDefinitionId!.Value)
+                .Distinct().ToList();
+
+            var definitionStatuses = definitionIds.Count > 0
+                ? await db.ExecutableWorkflowDefinitions
+                    .Where(d => definitionIds.Contains(d.Id))
+                    .Select(d => new { d.Id, d.Status })
+                    .ToDictionaryAsync(d => d.Id, d => d.Status.ToString(), ct)
+                : new Dictionary<Guid, string>();
+
+            var events = rawEvents.Select(e =>
+            {
+                // Resolve current status: instance status takes priority, then definition status
+                string? currentStatus = null;
+                if (e.WorkflowInstanceId.HasValue)
+                    instanceStatuses.TryGetValue(e.WorkflowInstanceId.Value, out currentStatus);
+                else if (e.WorkflowDefinitionId.HasValue)
+                    definitionStatuses.TryGetValue(e.WorkflowDefinitionId.Value, out currentStatus);
+
+                return new
                 {
                     e.EventName,
                     e.Category,
@@ -99,12 +135,13 @@ public static class OpsEndpoints
                     e.WorkflowKey,
                     e.WorkflowDefinitionId,
                     e.WorkflowInstanceId,
+                    Status = currentStatus,
                     e.TriggerType,
                     e.StepType,
                     e.ActorId,
                     e.Metadata
-                })
-                .ToListAsync(ct);
+                };
+            });
 
             var summary = await db.PilotTelemetryEvents
                 .Where(e => e.OccurredAtUtc >= since)

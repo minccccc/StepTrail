@@ -172,7 +172,7 @@ public static class InstanceEndpoints
             {
                 var response = await service.RetryAsync(id, ct);
                 await telemetry.RecordAsync(TelemetryEvents.ManualRetryTriggered, TelemetryEvents.Categories.Execution, ct,
-                    workflowInstanceId: id);
+                    workflowKey: response.WorkflowKey, workflowInstanceId: id, status: response.InstanceStatus);
                 return Results.Ok(response);
             }
             catch (WorkflowInstanceNotFoundException ex)
@@ -195,7 +195,7 @@ public static class InstanceEndpoints
             {
                 var response = await service.ReplayAsync(id, ct);
                 await telemetry.RecordAsync(TelemetryEvents.ReplayTriggered, TelemetryEvents.Categories.Execution, ct,
-                    workflowInstanceId: id);
+                    workflowKey: response.WorkflowKey, workflowInstanceId: id, status: response.InstanceStatus);
                 return Results.Ok(response);
             }
             catch (WorkflowInstanceNotFoundException ex)

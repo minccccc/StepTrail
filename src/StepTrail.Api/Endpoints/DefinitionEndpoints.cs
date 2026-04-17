@@ -196,7 +196,7 @@ public static class DefinitionEndpoints
             }
 
             await telemetry.RecordAsync(TelemetryEvents.WorkflowCreatedFromTemplate, TelemetryEvents.Categories.Authoring, ct,
-                workflowKey: definition.Key, workflowDefinitionId: definition.Id, triggerType: triggerType.ToString(),
+                workflowKey: definition.Key, workflowDefinitionId: definition.Id, status: definition.Status.ToString(), triggerType: triggerType.ToString(),
                 metadata: new { descriptorKey = descriptor.Key, descriptorVersion = descriptor.Version, stepCount = steps.Count });
 
             return Results.Created(
@@ -249,7 +249,7 @@ public static class DefinitionEndpoints
             }
 
             await telemetry.RecordAsync(TelemetryEvents.WorkflowCreatedBlank, TelemetryEvents.Categories.Authoring, ct,
-                workflowKey: definition.Key, workflowDefinitionId: definition.Id, triggerType: triggerType.ToString());
+                workflowKey: definition.Key, workflowDefinitionId: definition.Id, status: definition.Status.ToString(), triggerType: triggerType.ToString());
 
             return Results.Created(
                 $"/workflow-definitions/{definition.Id}",
@@ -318,7 +318,7 @@ public static class DefinitionEndpoints
             }
 
             await telemetry.RecordAsync(TelemetryEvents.WorkflowCloned, TelemetryEvents.Categories.Authoring, ct,
-                workflowKey: cloned.Key, workflowDefinitionId: cloned.Id,
+                workflowKey: cloned.Key, workflowDefinitionId: cloned.Id, status: cloned.Status.ToString(),
                 metadata: new { clonedFromId = request.TemplateId, clonedFromKey = template.Key });
 
             return Results.Created(
@@ -785,7 +785,7 @@ public static class DefinitionEndpoints
             }
 
             await telemetry.RecordAsync(TelemetryEvents.WorkflowActivated, TelemetryEvents.Categories.Authoring, ct,
-                workflowKey: definition.Key, workflowDefinitionId: id,
+                workflowKey: definition.Key, workflowDefinitionId: id, status: WorkflowDefinitionStatus.Active.ToString(),
                 triggerType: definition.TriggerDefinition.Type.ToString(),
                 metadata: new { stepCount = definition.StepDefinitions.Count });
 
@@ -815,7 +815,7 @@ public static class DefinitionEndpoints
             await db.SaveChangesAsync(ct);
 
             await telemetry.RecordAsync(TelemetryEvents.WorkflowDeactivated, TelemetryEvents.Categories.Authoring, ct,
-                workflowKey: record.Key, workflowDefinitionId: id);
+                workflowKey: record.Key, workflowDefinitionId: id, status: record.Status.ToString());
 
             return Results.Ok(new { id, status = "Inactive" });
         });

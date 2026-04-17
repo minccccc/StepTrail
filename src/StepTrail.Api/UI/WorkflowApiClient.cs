@@ -523,6 +523,7 @@ public sealed class TelemetryRecentEvent
     public string? WorkflowKey { get; init; }
     public Guid? WorkflowDefinitionId { get; init; }
     public Guid? WorkflowInstanceId { get; init; }
+    public string? Status { get; init; }
     public string? TriggerType { get; init; }
     public string? StepType { get; init; }
     public string? ActorId { get; init; }

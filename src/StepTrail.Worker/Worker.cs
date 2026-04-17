@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+
 namespace StepTrail.Worker;
 
 public sealed class Worker : BackgroundService
@@ -23,6 +25,9 @@ public sealed class Worker : BackgroundService
     {
         _logger.LogInformation("Worker {WorkerId} starting (poll interval: {Interval}s)",
             _workerId, _pollInterval.TotalSeconds);
+
+        // Wait for the database schema to be ready (migrations are applied by the API on startup).
+        await WaitForDatabaseAsync(stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -96,5 +101,31 @@ public sealed class Worker : BackgroundService
         await processor.ProcessAsync(execution, ct);
 
         return true;
+    }
+
+    private async Task WaitForDatabaseAsync(CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<StepTrail.Shared.StepTrailDbContext>();
+
+        for (var attempt = 1; attempt <= 30; attempt++)
+        {
+            try
+            {
+                // Check if the migrations table and a core table exist
+                await db.WorkflowInstances.AnyAsync(ct);
+                _logger.LogInformation("Worker {WorkerId} database ready after {Attempts} check(s)", _workerId, attempt);
+                return;
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                if (attempt == 1)
+                    _logger.LogInformation("Worker {WorkerId} waiting for database schema...", _workerId);
+
+                await Task.Delay(TimeSpan.FromSeconds(2), ct);
+            }
+        }
+
+        _logger.LogWarning("Worker {WorkerId} proceeding after database wait timeout — schema may not be ready", _workerId);
     }
 }

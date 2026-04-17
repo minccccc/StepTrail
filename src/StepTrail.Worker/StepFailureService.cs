@@ -196,7 +196,7 @@ public sealed class StepFailureService
                 WorkflowInstanceId = execution.WorkflowInstanceId,
                 WorkflowKey = resolvedKey,
                 WorkflowVersion = resolvedVersion,
-                Status = "Running",
+                Status = WorkflowInstanceStatus.Running.ToString(),
                 StepKey = execution.StepKey,
                 Attempt = execution.Attempt,
                 Message = $"Stuck execution detected for step '{execution.StepKey}' — worker may have crashed",
@@ -214,7 +214,7 @@ public sealed class StepFailureService
                 WorkflowInstanceId = execution.WorkflowInstanceId,
                 WorkflowKey = resolvedKey,
                 WorkflowVersion = resolvedVersion,
-                Status = "Failed",
+                Status = WorkflowInstanceStatus.Failed.ToString(),
                 StepKey = execution.StepKey,
                 Attempt = execution.Attempt,
                 Message = $"Workflow failed after {execution.Attempt} attempt(s) on step '{execution.StepKey}'",
@@ -226,7 +226,7 @@ public sealed class StepFailureService
         if (workflowFailed)
         {
             await _telemetry.RecordAsync(TelemetryEvents.WorkflowFailed, TelemetryEvents.Categories.Execution, ct,
-                workflowKey: resolvedKey, workflowInstanceId: execution.WorkflowInstanceId,
+                workflowKey: resolvedKey, workflowInstanceId: execution.WorkflowInstanceId, status: WorkflowInstanceStatus.Failed.ToString(),
                 metadata: new { stepKey = execution.StepKey, attempt = execution.Attempt,
                     classification = failureClassification?.ToString() });
         }

@@ -75,7 +75,7 @@ public class WorkflowInstanceServiceIntegrationTests
         await using (var dbContext = _fixture.CreateDbContext())
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
-            var service = new WorkflowInstanceService(
+            var service = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -156,7 +156,7 @@ public class WorkflowInstanceServiceIntegrationTests
 
         await using var dbContext = _fixture.CreateDbContext();
         var repository = new WorkflowDefinitionRepository(dbContext);
-        var service = new WorkflowInstanceService(
+        var service = WorkflowInstanceService.CreateForTest(
             dbContext,
             new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
             repository);
@@ -198,7 +198,7 @@ public class WorkflowInstanceServiceIntegrationTests
         await using (var dbContext = _fixture.CreateDbContext())
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
-            var service = new WorkflowInstanceService(
+            var service = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -243,7 +243,7 @@ public class WorkflowInstanceServiceIntegrationTests
         await using (var dbContext = _fixture.CreateDbContext())
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
-            var service = new WorkflowInstanceService(
+            var service = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -307,7 +307,7 @@ public class WorkflowInstanceServiceIntegrationTests
         await using (var dbContext = _fixture.CreateDbContext())
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
-            var service = new WorkflowInstanceService(
+            var service = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -334,7 +334,7 @@ public class WorkflowInstanceServiceIntegrationTests
         await using (var dbContext = _fixture.CreateDbContext())
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
-            var service = new WorkflowInstanceService(
+            var service = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -427,7 +427,7 @@ public class WorkflowInstanceServiceIntegrationTests
         await using (var dbContext = _fixture.CreateDbContext())
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
-            var service = new WorkflowInstanceService(
+            var service = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);

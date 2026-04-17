@@ -14,6 +14,7 @@ public class PilotTelemetryEvent
     public string? WorkflowKey { get; set; }
     public Guid? WorkflowDefinitionId { get; set; }
     public Guid? WorkflowInstanceId { get; set; }
+    public string? Status { get; set; }
     public string? TriggerType { get; set; }
     public string? StepType { get; set; }
     public string? Metadata { get; set; }

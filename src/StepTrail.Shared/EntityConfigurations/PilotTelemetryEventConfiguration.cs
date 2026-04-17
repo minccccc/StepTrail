@@ -18,6 +18,7 @@ public class PilotTelemetryEventConfiguration : IEntityTypeConfiguration<PilotTe
         builder.Property(e => e.WorkflowKey).HasColumnName("workflow_key").HasMaxLength(200);
         builder.Property(e => e.WorkflowDefinitionId).HasColumnName("workflow_definition_id");
         builder.Property(e => e.WorkflowInstanceId).HasColumnName("workflow_instance_id");
+        builder.Property(e => e.Status).HasColumnName("status").HasMaxLength(50);
         builder.Property(e => e.TriggerType).HasColumnName("trigger_type").HasMaxLength(50);
         builder.Property(e => e.StepType).HasColumnName("step_type").HasMaxLength(50);
         builder.Property(e => e.Metadata).HasColumnName("metadata").HasColumnType("jsonb");

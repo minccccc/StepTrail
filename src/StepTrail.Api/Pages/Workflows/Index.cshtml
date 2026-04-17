@@ -119,12 +119,11 @@ else
                     <tr class="@(item.Status == "Archived" ? "text-muted" : "")">
                         <td class="font-monospace small">
                             <a href="/ops/workflows/details?id=@item.Id" class="text-decoration-none">
-                                @item.Id.ToString()[..8]…
+                                @item.Id.ToString()
                             </a>
                         </td>
                         <td>
                             @item.WorkflowKey
-                            <span class="badge bg-light text-dark border ms-1">v@item.WorkflowVersion</span>
                         </td>
                         <td>@Html.Raw(TriggerBadge(item.TriggerType))</td>
                         <td class="text-muted small">@(item.ExternalKey ?? "—")</td>

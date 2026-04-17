@@ -30,6 +30,7 @@ public sealed class TelemetryService
         string? workflowKey = null,
         Guid? workflowDefinitionId = null,
         Guid? workflowInstanceId = null,
+        string? status = null,
         string? triggerType = null,
         string? stepType = null,
         object? metadata = null,
@@ -46,6 +47,7 @@ public sealed class TelemetryService
                 WorkflowKey = workflowKey,
                 WorkflowDefinitionId = workflowDefinitionId,
                 WorkflowInstanceId = workflowInstanceId,
+                Status = status,
                 TriggerType = triggerType,
                 StepType = stepType,
                 Metadata = metadata is not null

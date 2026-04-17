@@ -31,18 +31,17 @@ else if (Model.Dashboard is null)
 else
 {
     var dashboard = Model.Dashboard;
-
-    @* ── Summary by category ── *@
     var categories = dashboard.Summary.GroupBy(s => s.Category).OrderBy(g => g.Key);
 
+    @* ── Summary by category ── *@
     <div class="row g-3 mb-4">
         @foreach (var cat in categories)
         {
             <div class="col-md-4">
                 <div class="card shadow-sm h-100">
                     <div class="card-header fw-semibold small d-flex align-items-center justify-content-between">
-                        <span>@cat.Key</span>
-                        <span class="badge bg-light text-dark border">@cat.Sum(e => e.Count) total</span>
+                        @Html.Raw(CategoryBadge(cat.Key))
+                        <span class="text-muted small">@cat.Sum(e => e.Count) total</span>
                     </div>
                     <div class="card-body p-0">
                         <table class="table table-sm small mb-0">
@@ -79,56 +78,62 @@ else
             <table class="table table-hover table-sm small align-middle mb-0">
                 <thead class="table-light">
                     <tr>
-                        <th>Time</th>
+                        <th>Time (UTC)</th>
                         <th>Category</th>
                         <th>Event</th>
+                        <th>Status</th>
                         <th>Workflow</th>
-                        <th>Trigger</th>
-                        <th>Step</th>
-                        <th>Actor</th>
-                        <th>Details</th>
+                        <th>Instance ID</th>
+                        <th>Definition ID</th>
                     </tr>
                 </thead>
                 <tbody>
                     @foreach (var evt in dashboard.RecentEvents)
                     {
                         <tr>
-                            <td class="text-muted text-nowrap">@evt.OccurredAtUtc.ToString("MM-dd HH:mm:ss")</td>
+                            <td class="text-muted text-nowrap">@evt.OccurredAtUtc.UtcDateTime.ToString("MM-dd HH:mm:ss")</td>
                             <td>@Html.Raw(CategoryBadge(evt.Category))</td>
                             <td class="font-monospace">@evt.EventName</td>
+                            <td>
+                                @if (!string.IsNullOrWhiteSpace(evt.Status))
+                                {
+                                    @Html.Raw(StatusBadge(evt.Status))
+                                }
+                                else
+                                {
+                                    <span class="text-muted">—</span>
+                                }
+                            </td>
                             <td>
                                 @if (!string.IsNullOrWhiteSpace(evt.WorkflowKey))
                                 {
                                     <span class="font-monospace">@evt.WorkflowKey</span>
                                 }
+                                else
+                                {
+                                    <span class="text-muted">—</span>
+                                }
+                            </td>
+                            <td>
                                 @if (evt.WorkflowInstanceId.HasValue)
                                 {
-                                    <br /><a href="/ops/workflows/details?id=@evt.WorkflowInstanceId"
-                                             class="text-muted" style="font-size:0.7rem">@evt.WorkflowInstanceId.Value.ToString()[..8]...</a>
+                                    <a href="/ops/workflows/details?id=@evt.WorkflowInstanceId"
+                                       class="font-monospace text-decoration-none small">@evt.WorkflowInstanceId.Value</a>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">—</span>
                                 }
                             </td>
                             <td>
-                                @if (!string.IsNullOrWhiteSpace(evt.TriggerType))
+                                @if (evt.WorkflowDefinitionId.HasValue)
                                 {
-                                    <span class="badge bg-light text-dark border">@evt.TriggerType</span>
+                                    <a href="/ops/definitions/edit?id=@evt.WorkflowDefinitionId"
+                                       class="font-monospace text-decoration-none small">@evt.WorkflowDefinitionId.Value</a>
                                 }
-                            </td>
-                            <td>
-                                @if (!string.IsNullOrWhiteSpace(evt.StepType))
+                                else
                                 {
-                                    <span class="badge bg-light text-dark border">@evt.StepType</span>
-                                }
-                            </td>
-                            <td class="text-muted">@evt.ActorId</td>
-                            <td>
-                                @if (!string.IsNullOrWhiteSpace(evt.Metadata))
-                                {
-                                    <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-1"
-                                            data-bs-toggle="popover"
-                                            data-bs-trigger="focus"
-                                            data-bs-content="@evt.Metadata"
-                                            data-bs-placement="left"
-                                            title="Metadata">...</button>
+                                    <span class="text-muted">—</span>
                                 }
                             </td>
                         </tr>
@@ -137,17 +142,53 @@ else
             </table>
         </div>
     </div>
+
+    @* ── Event Reference ── *@
+    <details class="mt-4">
+        <summary class="fw-semibold small text-muted" style="cursor:pointer">Event Reference</summary>
+        <div class="card shadow-sm mt-2">
+            <div class="card-body p-0">
+                <table class="table table-sm small mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-3">Event</th>
+                            <th>Category</th>
+                            <th>When it fires</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td class="ps-3 font-monospace">workflow_started</td><td>Execution</td><td>New instance created (webhook, manual, or schedule trigger)</td></tr>
+                        <tr><td class="ps-3 font-monospace">workflow_failed</td><td>Execution</td><td>Instance enters Failed state (retries exhausted or permanent failure)</td></tr>
+                        <tr><td class="ps-3 font-monospace">manual_retry_triggered</td><td>Execution</td><td>User retries a failed instance from the last failed step</td></tr>
+                        <tr><td class="ps-3 font-monospace">replay_triggered</td><td>Execution</td><td>User replays an instance from step 1</td></tr>
+                        <tr class="table-light"><td colspan="3" class="ps-3 fw-semibold text-muted">Authoring</td></tr>
+                        <tr><td class="ps-3 font-monospace">workflow_created_from_template</td><td>Authoring</td><td>Definition created from a template</td></tr>
+                        <tr><td class="ps-3 font-monospace">workflow_created_blank</td><td>Authoring</td><td>Blank definition created</td></tr>
+                        <tr><td class="ps-3 font-monospace">workflow_cloned</td><td>Authoring</td><td>Definition cloned from another</td></tr>
+                        <tr><td class="ps-3 font-monospace">workflow_activated</td><td>Authoring</td><td>Definition activated (ready to trigger)</td></tr>
+                        <tr><td class="ps-3 font-monospace">workflow_deactivated</td><td>Authoring</td><td>Definition deactivated</td></tr>
+                        <tr class="table-light"><td colspan="3" class="ps-3 fw-semibold text-muted">Errors</td></tr>
+                        <tr><td class="ps-3 font-monospace">activation_failed</td><td>Error</td><td>Activation validation failed (missing config, no steps)</td></tr>
+                        <tr><td class="ps-3 font-monospace">alert_delivery_failed</td><td>Error</td><td>Alert webhook delivery failed</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </details>
 }
 
-<script>
-    // Initialize Bootstrap popovers for metadata
-    document.addEventListener('DOMContentLoaded', function () {
-        var popoverTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="popover"]'));
-        popoverTriggerList.forEach(function (el) { new bootstrap.Popover(el); });
-    });
-</script>
-
 @functions {
+    static string StatusBadge(string status) => status switch
+    {
+        "Pending"  => "<span class=\"badge bg-secondary\">Pending</span>",
+        "Running"  => "<span class=\"badge bg-primary\">Running</span>",
+        "Failed"   => "<span class=\"badge bg-danger\">Failed</span>",
+        "Active"   => "<span class=\"badge bg-success\">Active</span>",
+        "Inactive" => "<span class=\"badge bg-secondary\">Inactive</span>",
+        "Completed"=> "<span class=\"badge bg-success\">Completed</span>",
+        _          => $"<span class=\"badge bg-light text-dark border\">{status}</span>"
+    };
+
     static string CategoryBadge(string category) => category switch
     {
         "Authoring" => "<span class=\"badge bg-primary\">Authoring</span>",

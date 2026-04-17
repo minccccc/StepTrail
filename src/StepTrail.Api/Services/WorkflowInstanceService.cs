@@ -1,7 +1,7 @@
 using StepTrail.Api.Models;
-using Microsoft.Extensions.DependencyInjection;
 using StepTrail.Shared.Definitions;
 using StepTrail.Shared.Runtime;
+using StepTrail.Shared.Telemetry;
 using StepTrail.Shared.Workflows;
 using StepTrail.Shared;
 
@@ -10,20 +10,18 @@ namespace StepTrail.Api.Services;
 public sealed class WorkflowInstanceService
 {
     private readonly WorkflowStartService _workflowStartService;
+    private readonly TelemetryService? _telemetry;
 
-    [ActivatorUtilitiesConstructor]
-    public WorkflowInstanceService(WorkflowStartService workflowStartService)
+    public WorkflowInstanceService(WorkflowStartService workflowStartService, TelemetryService telemetry)
     {
         _workflowStartService = workflowStartService;
+        _telemetry = telemetry;
     }
 
-    public WorkflowInstanceService(
-        StepTrailDbContext db,
-        IWorkflowRegistry registry,
-        IWorkflowDefinitionRepository workflowDefinitionRepository)
-        : this(new WorkflowStartService(db, registry, workflowDefinitionRepository))
-    {
-    }
+    /// <summary>Test-only factory — creates without telemetry.</summary>
+    public static WorkflowInstanceService CreateForTest(
+        StepTrailDbContext db, IWorkflowRegistry registry, IWorkflowDefinitionRepository repo) =>
+        new(new WorkflowStartService(db, registry, repo), null!);
 
     public async Task<(StartWorkflowResponse Response, bool Created)> StartAsync(
         StartWorkflowRequest request,
@@ -45,6 +43,13 @@ public sealed class WorkflowInstanceService
                     TriggerData = request.TriggerData
                 },
                 cancellationToken);
+
+            if (result.Created && _telemetry is not null)
+            {
+                await _telemetry.RecordAsync(
+                    TelemetryEvents.WorkflowStarted, TelemetryEvents.Categories.Execution, cancellationToken,
+                    workflowKey: result.WorkflowKey, workflowInstanceId: result.Id, status: result.Status);
+            }
 
             return (MapToResponse(result), result.Created);
         }

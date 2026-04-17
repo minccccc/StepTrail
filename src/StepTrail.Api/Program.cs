@@ -55,8 +55,7 @@ if (builder.Environment.IsDevelopment())
     builder.Services.AddHostedService<DevDataSeedService>();
 
 // ── Application services ────────────────────────────────────────────────────
-builder.Services.AddScoped<WorkflowInstanceService>(sp =>
-    new WorkflowInstanceService(sp.GetRequiredService<StepTrail.Shared.Runtime.WorkflowStartService>()));
+builder.Services.AddScoped<WorkflowInstanceService>();
 builder.Services.AddScoped<ExecutableWorkflowTriggerResolver>();
 builder.Services.AddScoped<ManualWorkflowTriggerService>();
 builder.Services.AddScoped<WebhookIdempotencyKeyExtractor>();

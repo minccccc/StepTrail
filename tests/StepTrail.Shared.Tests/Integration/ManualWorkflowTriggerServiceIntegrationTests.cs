@@ -56,7 +56,7 @@ public class ManualWorkflowTriggerServiceIntegrationTests
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
             var resolver = new ExecutableWorkflowTriggerResolver(dbContext, repository);
-            var workflowInstanceService = new WorkflowInstanceService(
+            var workflowInstanceService = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -151,7 +151,7 @@ public class ManualWorkflowTriggerServiceIntegrationTests
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
             var resolver = new ExecutableWorkflowTriggerResolver(dbContext, repository);
-            var workflowInstanceService = new WorkflowInstanceService(
+            var workflowInstanceService = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);
@@ -203,7 +203,7 @@ public class ManualWorkflowTriggerServiceIntegrationTests
         {
             var repository = new WorkflowDefinitionRepository(dbContext);
             var resolver = new ExecutableWorkflowTriggerResolver(dbContext, repository);
-            var workflowInstanceService = new WorkflowInstanceService(
+            var workflowInstanceService = WorkflowInstanceService.CreateForTest(
                 dbContext,
                 new WorkflowRegistry(Array.Empty<WorkflowDescriptor>()),
                 repository);

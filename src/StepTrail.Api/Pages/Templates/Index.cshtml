@@ -39,7 +39,6 @@ else
                     <th>Source</th>
                     <th>Trigger</th>
                     <th>Status</th>
-                    <th>Version</th>
                     <th>Steps</th>
                     <th>Updated</th>
                     <th></th>
@@ -69,9 +68,6 @@ else
                         </td>
                         <td>@Html.Raw(TriggerBadge(def.TriggerType))</td>
                         <td>@Html.Raw(StatusBadge(def.Status))</td>
-                        <td class="text-center">
-                            <span class="badge bg-light text-dark border">v@def.Version</span>
-                        </td>
                         <td class="text-center text-muted">@def.StepCount</td>
                         <td class="text-muted small">@def.UpdatedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
                         <td class="d-flex gap-1">

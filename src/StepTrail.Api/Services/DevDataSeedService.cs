@@ -82,6 +82,50 @@ public sealed class DevDataSeedService : IHostedService
             "Receives a webhook, transforms the payload, calls API A, transforms the result, then calls API B. Failure in later steps can be retried without re-running earlier completed steps.",
             ct);
 
+        // ── TestLab demo workflow ────────────────────────────────────────────────
+        await CreateAndActivateAsync(repository,
+            "testlab-demo-chain", "TestLab Demo - API Chain",
+            TriggerDefinition.CreateWebhook(Guid.NewGuid(), new WebhookTriggerConfiguration("testlab-demo-chain")),
+            [
+                StepDefinition.CreateTransform(Guid.NewGuid(), "transform-for-api-a", 1,
+                    new TransformStepConfiguration([
+                        new TransformValueMapping("requestId", "{{input.id}}"),
+                        new TransformValueMapping("action", "{{input.action}}"),
+                        new TransformValueMapping("customerId", "{{input.payload.customerId}}"),
+                        new TransformValueMapping("scenario", "{{input.labScenario}}")
+                    ])),
+                StepDefinition.CreateHttpRequest(Guid.NewGuid(), "call-api-a", 2,
+                    new HttpRequestStepConfiguration(
+                        "{{secrets.testlab-api-a-url}}", "POST",
+                        new Dictionary<string, string> { ["Authorization"] = "Bearer {{secrets.testlab-api-a-token}}" },
+                        timeoutSeconds: 20),
+                    retryPolicy: new RetryPolicy(2, 2, BackoffStrategy.Fixed)),
+                StepDefinition.CreateTransform(Guid.NewGuid(), "transform-for-api-b", 3,
+                    new TransformStepConfiguration([
+                        new TransformValueMapping("sourceId", "{{steps.call-api-a.output.body.id}}"),
+                        new TransformValueMapping("status", "{{steps.call-api-a.output.body.status}}"),
+                        new TransformValueMapping("scenario", "{{steps.transform-for-api-a.output.scenario}}"),
+                        new TransformValueMapping("originalRequestId", "{{steps.transform-for-api-a.output.requestId}}"),
+                        new TransformValueMapping("customerId", "{{steps.transform-for-api-a.output.customerId}}")
+                    ])),
+                StepDefinition.CreateHttpRequest(Guid.NewGuid(), "call-api-b", 4,
+                    new HttpRequestStepConfiguration(
+                        "{{secrets.testlab-api-b-url}}", "POST",
+                        new Dictionary<string, string> { ["Authorization"] = "Bearer {{secrets.testlab-api-b-token}}" },
+                        timeoutSeconds: 20),
+                    retryPolicy: new RetryPolicy(3, 4, BackoffStrategy.Fixed))
+            ],
+            "testlab-demo",
+            "TestLab demo workflow for demos. Shows success, retry, and permanent failure scenarios.",
+            ct);
+
+        // Seed TestLab secrets (pointing to localhost TestLab mock endpoints)
+        var testLabBaseUrl = "http://localhost:5010";
+        await UpsertSecretAsync(db, "testlab-api-a-url", $"{testLabBaseUrl}/mock/api-a", "TestLab mock endpoint for API A.", ct);
+        await UpsertSecretAsync(db, "testlab-api-b-url", $"{testLabBaseUrl}/mock/api-b", "TestLab mock endpoint for API B.", ct);
+        await UpsertSecretAsync(db, "testlab-api-a-token", "testlab-api-a-token", "Bearer token for TestLab API A.", ct);
+        await UpsertSecretAsync(db, "testlab-api-b-token", "testlab-api-b-token", "Bearer token for TestLab API B.", ct);
+
         // Read back persisted records to get the DB-mapped IDs for step definitions
         var forwardRecord = await db.ExecutableWorkflowDefinitions
             .Include(d => d.StepDefinitions.OrderBy(s => s.Order))
@@ -90,6 +134,10 @@ public sealed class DevDataSeedService : IHostedService
         var chainRecord = await db.ExecutableWorkflowDefinitions
             .Include(d => d.StepDefinitions.OrderBy(s => s.Order))
             .FirstAsync(d => d.Key == "api-chain", ct);
+
+        var testlabRecord = await db.ExecutableWorkflowDefinitions
+            .Include(d => d.StepDefinitions.OrderBy(s => s.Order))
+            .FirstAsync(d => d.Key == "testlab-demo-chain", ct);
 
         // ── Create instances for the forward workflow ────────────────────────────
         var now = DateTimeOffset.UtcNow;
@@ -115,8 +163,16 @@ public sealed class DevDataSeedService : IHostedService
         SeedRunningInstance(db, chainRecord, now.AddMinutes(-2), "chain-running",
             """{"id":"req-003","action":"validate","payload":{"customerId":"cust-55"}}""");
 
+        // ── Create instances for the TestLab workflow ────────────────────────────
+        SeedCompletedInstance(db, testlabRecord, now.AddHours(-1), "testlab-ok",
+            """{"id":"lab-001","action":"sync","labScenario":"success","payload":{"customerId":"cust-100"}}""");
+
+        SeedPartialFailureInstance(db, testlabRecord, now.AddMinutes(-15), "testlab-fail",
+            """{"id":"lab-002","action":"process","labScenario":"fail","payload":{"customerId":"cust-200"}}""",
+            "HTTP 500 Internal Server Error from mock API B");
+
         await db.SaveChangesAsync(ct);
-        _logger.LogInformation("Dev seed data created — 2 workflow definitions, 6 instances");
+        _logger.LogInformation("Dev seed data created — 3 workflow definitions, 8 instances");
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
@@ -396,4 +452,32 @@ public sealed class DevDataSeedService : IHostedService
         EventType = eventType,
         CreatedAt = createdAt
     };
+
+    private static async Task UpsertSecretAsync(
+        StepTrailDbContext db, string name, string value, string description, CancellationToken ct)
+    {
+        var existing = await db.WorkflowSecrets
+            .FirstOrDefaultAsync(s => s.Name == name, ct);
+
+        if (existing is null)
+        {
+            db.WorkflowSecrets.Add(new WorkflowSecret
+            {
+                Id = Guid.NewGuid(),
+                Name = name,
+                Value = value,
+                Description = description,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            });
+        }
+        else
+        {
+            existing.Value = value;
+            existing.Description = description;
+            existing.UpdatedAt = DateTimeOffset.UtcNow;
+        }
+
+        await db.SaveChangesAsync(ct);
+    }
 }

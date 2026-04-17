@@ -107,6 +107,7 @@ public sealed class WorkflowRetryService
             return new WorkflowRetryResponse
             {
                 InstanceId = instanceId,
+                WorkflowKey = instance.WorkflowDefinitionKey ?? instanceId.ToString(),
                 InstanceStatus = instance.Status.ToString(),
                 NewStepExecutionId = newExecution.Id,
                 StepKey = newExecution.StepKey
@@ -186,6 +187,7 @@ public sealed class WorkflowRetryService
             return new WorkflowRetryResponse
             {
                 InstanceId = instanceId,
+                WorkflowKey = instance.WorkflowDefinitionKey ?? instanceId.ToString(),
                 InstanceStatus = instance.Status.ToString(),
                 NewStepExecutionId = firstExecution.Id,
                 StepKey = firstExecution.StepKey
